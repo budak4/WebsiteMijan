@@ -8,39 +8,31 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: Download + install UltraVNC
+      - name: Diagnose VNC server download URLs
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
           $urls = @(
             "https://sourceforge.net/projects/ultravnc/files/latest/download",
             "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.6/UltraVNC_1_4_3_6_X64_Setup.exe/download",
-            "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.1/UltraVNC_1_4_3_1_X64_Setup.exe/download"
+            "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.1/UltraVNC_1_4_3_1_X64_Setup.exe/download",
+            "https://downloads.sourceforge.net/project/ultravnc/UltraVNC/1.4.3.6/UltraVNC_1_4_3_6_X64_Setup.exe",
+            "https://downloads.tigervnc.org/stable/tigervnc-1.16.2.x86_64.zip",
+            "https://downloads.tigervnc.org/stable/tigervnc-1.16.2.x86_64.exe",
+            "https://downloads.tigervnc.org/stable/tigervnc-1.15.0.x86_64.zip"
           )
-          $ok = $false
           foreach ($u in $urls) {
-            try {
-              Write-Output "trying: $u"
-              Invoke-WebRequest -Uri $u -OutFile "C:\uvnc_setup.exe" -TimeoutSec 300 -MaximumRedirection 10
-              if ((Get-Item C:\uvnc_setup.exe).Length -gt 1MB) { $ok = $true; Write-Output "downloaded OK"; break }
-            } catch { Write-Output "failed: $($_.Exception.Message)" }
+            $r = curl.exe -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o "C:\dl_probe.bin" -w "%{http_code} %{size_download} %{url_effective}" -m 90 $u 2>&1
+            Write-Output ("PROBE " + $u + " => " + $r + " | size=" + ((Get-Item C:\dl_probe.bin -ErrorAction SilentlyContinue).Length))
           }
-          if (-not $ok) { throw "UltraVNC download failed" }
-          $ver = (Get-Item C:\uvnc_setup.exe).VersionInfo.FileVersion
-          Write-Output "setup version: $ver"
-          $p = Start-Process -FilePath "C:\uvnc_setup.exe" -ArgumentList "/verysilent","/sp-","/suppressmsgboxes","/norestart" -Wait -PassThru
-          Write-Output "setup exit: $($p.ExitCode)"
-          $base = "C:\Program Files\UltraVNC"
-          if (-not (Test-Path $base)) { $base = "C:\Program Files (x86)\UltraVNC" }
-          Write-Output "base: $base"
-          Get-ChildItem $base -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-          if (-not (Test-Path "$base\winvnc.exe")) { throw "winvnc.exe not found under $base" }
-          Set-Content -Path "C:\vnc\uvnc_base.txt" -Value $base
 
       - name: Configure password + start VNC server
         shell: powershell
         run: |
-          $base = (Get-Content "C:\vnc\uvnc_base.txt" -Raw).Trim()
+          $base = "C:\Program Files\UltraVNC"
+          if (-not (Test-Path "$base\winvnc.exe")) { $base = "C:\Program Files (x86)\UltraVNC" }
+          if (-not (Test-Path "$base\winvnc.exe")) {
+            Write-Output "winvnc.exe absent - download didn't yield UltraVNC. Skipping."
+          } else {
           $reg = "HKLM:\SOFTWARE\UltraVNC\Global"
           New-Item -Path $reg -Force | Out-Null
           $key = @(23,82,107,6,35,78,88,7)
@@ -65,6 +57,7 @@ jobs:
           } else {
             Write-Output "5900 NOT LISTENING"
             Get-Content "C:\winvnc.err" -ErrorAction SilentlyContinue
+          }
           }
 
       - name: Install noVNC + websockify
