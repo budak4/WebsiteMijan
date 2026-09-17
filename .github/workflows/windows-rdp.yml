@@ -13,11 +13,17 @@ jobs:
         run: |
           $Password = "GhaRdp#2709"
           net user runneradmin $Password
+          net localgroup "Remote Desktop Users" runneradmin /add
           reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
           reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
           reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MinEncryptionLevel /t REG_DWORD /d 0 /f
           netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+          netsh advfirewall firewall add rule name="CUSTOM RDP" protocol=TCP dir=in localport=3389 action=allow | Out-Null
           Write-Output "RDP enabled, user=runneradmin"
+          Write-Output "=== check 3389 ==="
+          Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue | Format-Table LocalAddress,LocalPort,State -AutoSize
+          Get-Service TermService | Format-Table Name,Status,StartType -AutoSize
 
       - name: Install bore (bore.pub tunnel)
         shell: powershell
@@ -34,21 +40,56 @@ jobs:
         shell: powershell
         run: |
           $bore = (Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" | Select-Object -First 1).FullName
-          Write-Output "bore: $bore"
           Start-Process -FilePath $bore -ArgumentList @("local","3389","--to","bore.pub") -RedirectStandardOutput "C:\bore\bore.log" -RedirectStandardError "C:\bore\bore.err"
-          $url = ""
+          $boreUrl = ""
           for ($i=0; $i -lt 40; $i++) {
             Start-Sleep -Seconds 3
             $log = Get-Content "C:\bore\bore.log" -Raw -ErrorAction SilentlyContinue
-            if ($log -match 'bore\.pub:(\d+)') { $url = "bore.pub:$($matches[1])"; break }
+            if ($log -match 'bore\.pub:(\d+)') { $boreUrl = "bore.pub:$($matches[1])"; break }
             $log = Get-Content "C:\bore\bore.err" -Raw -ErrorAction SilentlyContinue
-            if ($log -match 'bore\.pub:(\d+)') { $url = "bore.pub:$($matches[1])"; break }
+            if ($log -match 'bore\.pub:(\d+)') { $boreUrl = "bore.pub:$($matches[1])"; break }
           }
-          Write-Output "RDP_HOST=$url"
-          Set-Content -Path "C:\bore\rdp-url.txt" -Value "host=$url  user=runneradmin  pass=GhaRdp#2709"
-          Add-Content -Path "C:\bore\rdp-url.txt" -Value ""
-          Add-Content -Path "C:\bore\rdp-url.txt" -Value "--- bore.log ---"
-          Add-Content -Path "C:\bore\rdp-url.txt" -Value (Get-Content "C:\bore\bore.log" -Raw -ErrorAction SilentlyContinue)
+          Write-Output "BORE_URL=$boreUrl"
+          Set-Content -Path "C:\bore\bore-url.txt" -Value $boreUrl
+
+      - name: Start serveo tunnel (RDP 3389) as backup
+        shell: powershell
+        run: |
+          $ssh = "C:\Windows\System32\OpenSSH\ssh.exe"
+          Start-Process -FilePath $ssh -ArgumentList @("-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=/dev/null","-o","ServerAliveInterval=30","-R","0:localhost:3389","serveo.net") -RedirectStandardOutput "C:\bore\serveo.log" -RedirectStandardError "C:\bore\serveo.err"
+          $serveoUrl = ""
+          for ($i=0; $i -lt 40; $i++) {
+            Start-Sleep -Seconds 3
+            $log = (Get-Content "C:\bore\serveo.log" -Raw -ErrorAction SilentlyContinue) + (Get-Content "C:\bore\serveo.err" -Raw -ErrorAction SilentlyContinue)
+            if ($log -match '([a-z0-9-]+\.serveo\.net:(\d+))') { $serveoUrl = $Matches[1]; break }
+          }
+          Write-Output "SERVEO_URL=$serveoUrl"
+          Set-Content -Path "C:\bore\serveo-url.txt" -Value $serveoUrl
+
+      - name: Collect RDP info
+        shell: powershell
+        run: |
+          $info = @()
+          $info += "host_bore=$((Get-Content 'C:\bore\bore-url.txt' -Raw -ErrorAction SilentlyContinue).Trim())"
+          $info += "host_serveo=$((Get-Content 'C:\bore\serveo-url.txt' -Raw -ErrorAction SilentlyContinue).Trim())"
+          $info += "user=runneradmin"
+          $info += "pass=GhaRdp#2709"
+          $info += ""
+          $info += "=== RDP 3389 local check ==="
+          $ln = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
+          if ($ln) { $info += "3389 LISTENING: YES" } else { $info += "3389 LISTENING: NO" }
+          $svc = Get-Service TermService -ErrorAction SilentlyContinue
+          $info += ("TermService: " + $svc.Status)
+          $info += ""
+          $info += "=== bore.log ==="
+          $info += (Get-Content 'C:\bore\bore.log' -Raw -ErrorAction SilentlyContinue)
+          $info += "=== bore.err ==="
+          $info += (Get-Content 'C:\bore\bore.err' -Raw -ErrorAction SilentlyContinue)
+          $info += "=== serveo.log ==="
+          $info += (Get-Content 'C:\bore\serveo.log' -Raw -ErrorAction SilentlyContinue)
+          $info += "=== serveo.err ==="
+          $info += (Get-Content 'C:\bore\serveo.err' -Raw -ErrorAction SilentlyContinue)
+          $info | Set-Content "C:\bore\rdp-url.txt"
           Get-Content "C:\bore\rdp-url.txt"
 
       - name: Upload RDP URL
