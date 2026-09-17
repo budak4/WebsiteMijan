@@ -8,40 +8,84 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: Diagnose VNC server download URLs
+      - name: Install UltraVNC
         shell: powershell
         run: |
-          Write-Output "TIGER exists check:"
-          Write-Output ("chocoutravnc:" + [bool](Test-Path "C:\Program Files\UltraVNC\winvnc.exe"))
-          $urls = @(
-            "https://www.uvnc.eu/download/132/UltraVNC_1_3_2_X64_Setup.exe",
-            "https://www.uvnc.eu/download/143/UltraVNC_1_4_3_X64_Setup.exe",
-            "https://www.uvnc.eu/download/1431/UltraVNC_1_4_31_X64_Setup.exe",
-            "https://www.uvnc.eu/download/1432/UltraVNC_1_4_32_X64_Setup.exe",
-            "https://www.uvnc.eu/download/1436/UltraVNC_1_4_36_X64_Setup.exe",
-            "https://uvnc.eu/download/132/UltraVNC_1_3_2_X64_Setup.exe"
-          )
-          foreach ($u in $urls) {
-            $r = curl.exe -sIL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -w "%{http_code} %{size_download} %{url_effective}" -m 60 $u 2>&1 | Select-Object -Last 1
-            Write-Output ("PROBE " + $u + " => " + $r)
+          New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
+          choco install ultravnc -y --no-progress 2>&1 | ForEach-Object { Write-Output "choco: $_" }
+          Write-Output "choco_exit=$LASTEXITCODE"
+          $base = ""
+          foreach ($d in @("C:\Program Files\UltraVNC","C:\Program Files (x86)\UltraVNC","C:\Program Files\uvnc","C:\Program Files (x86)\uvnc")) {
+            if (Test-Path "$d\winvnc.exe") { $base = $d; break }
           }
+          if (-not $base) {
+            Write-Output "choco yield no winvnc, trying uvnc.eu 1.3.2"
+            Invoke-WebRequest -Uri "https://www.uvnc.eu/download/132/UltraVNC_1_3_2_X64_Setup.exe" -OutFile "C:\uvnc_setup.exe" -TimeoutSec 300 -MaximumRedirection 10
+            Write-Output ("setup size: " + (Get-Item C:\uvnc_setup.exe).Length)
+            $p = Start-Process -FilePath "C:\uvnc_setup.exe" -ArgumentList "/VERYSILENT","/SP-","/SUPPRESSMSGBOXES","/NOREBOOT" -Wait -PassThru
+            Write-Output "setup exit: $($p.ExitCode)"
+            foreach ($d in @("C:\Program Files\UltraVNC","C:\Program Files (x86)\UltraVNC")) {
+              if (Test-Path "$d\winvnc.exe") { $base = $d; break }
+            }
+          }
+          Write-Output "UVNC base: $base"
+          if (-not $base) { throw "winvnc.exe nowhere to be found" }
+          Set-Content -Path "C:\vnc\uvnc_base.txt" -Value $base
+          $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$base\winvnc.exe")
+          Write-Output "FileVersion: $($v.FileVersion) ProductVersion: $($v.ProductVersion)"
+          Add-Content -Path "C:\vnc\uvnc_base.txt" -Value $v.FileVersion
+          Add-Content -Path "C:\vnc\uvnc_base.txt" -Value $v.ProductVersion
 
       - name: Configure password + start VNC server
         shell: powershell
         run: |
-          $base = "C:\Program Files\UltraVNC"
-          if (-not (Test-Path "$base\winvnc.exe")) { $base = "C:\Program Files (x86)\UltraVNC" }
-          if (-not (Test-Path "$base\winvnc.exe")) {
-            Write-Output "winvnc.exe absent - download didn't yield UltraVNC. Skipping."
-          } else {
+          $lines = Get-Content "C:\vnc\uvnc_base.txt"
+          $base = $lines[0].Trim()
+          $filever = $lines[1].Trim()
+          Write-Output "winvnc filever: $filever"
+          function Des-Ecb($data, $key) {
+            $des = [System.Security.Cryptography.DES]::Create()
+            $des.Mode = [System.Security.Cryptography.CipherMode]::ECB
+            $des.Padding = [System.Security.Cryptography.PaddingMode]::None
+            $des.Key = $key
+            $t = $des.CreateEncryptor().TransformFinalBlock($data, 0, $data.Length)
+            $des.Dispose()
+            return $t
+          }
+          $key = [byte[]](23,82,107,6,35,78,88,7)
+          $pw = "sshhmm19"
+          $pt = New-Object byte[] 8
+          for ($i=0; $i -lt 8; $i++) { $pt[$i] = [byte][char]$pw[$i] }
+          $enc = Des-Ecb $pt $key
+          $hex = ($enc | ForEach-Object { $_.ToString("X2") }) -join ""
+          Write-Output ("encrypted passwd hex: " + $hex)
+          New-Item -ItemType Directory -Path (Split-Path $base) -Force | Out-Null
+          $ini = Join-Path $base "ultravnc.ini"
+          $sec = @(
+            "[Permissions]",
+            "[admin]",
+            "FileTransferEnabled=1",
+            "FTUserImpersonation=1",
+            "BlankMonitorEnabled=0",
+            "AllowLoopback=1",
+            "AllowShutdown=1",
+            "AllowProperties=1",
+            "DisableTrayIcon=0",
+            "",
+            "[UltraVNC]",
+            "passwd=$hex",
+            "passwd2=$hex",
+            "AuthRequired=1",
+            "PortNumber=5900",
+            "AllowLoopback=1"
+          )
+          Set-Content -Path $ini -Value $sec
+          Write-Output "wrote $ini"
+          Get-Content $ini
           $reg = "HKLM:\SOFTWARE\UltraVNC\Global"
           New-Item -Path $reg -Force | Out-Null
-          $key = @(23,82,107,6,35,78,88,7)
-          $pw = "sshhmm19"
-          $b = New-Object byte[] 8
-          for ($i=0; $i -lt 8; $i++) { $c = [int][char]$pw[$i]; $b[$i] = [byte]($c -bxor $key[$i]) }
-          New-ItemProperty -Path $reg -Name passwd -Value $b -PropertyType Binary -Force | Out-Null
-          New-ItemProperty -Path $reg -Name passwd2 -Value $b -PropertyType Binary -Force | Out-Null
+          New-ItemProperty -Path $reg -Name passwd -Value $enc -PropertyType Binary -Force | Out-Null
+          New-ItemProperty -Path $reg -Name passwd2 -Value $enc -PropertyType Binary -Force | Out-Null
           New-ItemProperty -Path $reg -Name AuthRequired -Value 1 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $reg -Name PortNumber -Value 5900 -PropertyType DWord -Force | Out-Null
           New-ItemProperty -Path $reg -Name AllowLoopback -Value 1 -PropertyType DWord -Force | Out-Null
@@ -58,7 +102,6 @@ jobs:
           } else {
             Write-Output "5900 NOT LISTENING"
             Get-Content "C:\winvnc.err" -ErrorAction SilentlyContinue
-          }
           }
 
       - name: Install noVNC + websockify
