@@ -8,46 +8,63 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: Install TigerVNC (via chocolatey)
+      - name: Download + install UltraVNC
         shell: powershell
         run: |
-          choco install tigervnc -y --no-progress
-          if ($LASTEXITCODE -ne 0) { choco install tigervnc -y --force --no-progress }
-          Write-Output "exit=$LASTEXITCODE"
-          Get-ChildItem -Path "C:\Program Files\TigerVNC" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-          $vncserver = Get-ChildItem -Recurse -Path "C:\Program Files\TigerVNC" -Filter "vncserver.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $vncserver) { $vncserver = (Get-Command vncserver -ErrorAction SilentlyContinue).Source }
-          $vncpass = Get-ChildItem -Recurse -Path "C:\Program Files\TigerVNC" -Filter "vncpasswd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $vncpass) { $vncpass = (Get-Command vncpasswd -ErrorAction SilentlyContinue).Source }
-          if (-not $vncserver -or -not $vncpass) { throw "TigerVNC binaries not found: server=$vncserver pass=$vncpass" }
-          Set-Content -Path "C:\vnc\paths.txt" -Value "server=$vncserver`npass=$vncpass"
-          Write-Output "server=$vncserver"
-          Write-Output "pass=$vncpass"
+          New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
+          $urls = @(
+            "https://sourceforge.net/projects/ultravnc/files/latest/download",
+            "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.6/UltraVNC_1_4_3_6_X64_Setup.exe/download",
+            "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.1/UltraVNC_1_4_3_1_X64_Setup.exe/download"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            try {
+              Write-Output "trying: $u"
+              Invoke-WebRequest -Uri $u -OutFile "C:\uvnc_setup.exe" -TimeoutSec 300 -MaximumRedirection 10
+              if ((Get-Item C:\uvnc_setup.exe).Length -gt 1MB) { $ok = $true; Write-Output "downloaded OK"; break }
+            } catch { Write-Output "failed: $($_.Exception.Message)" }
+          }
+          if (-not $ok) { throw "UltraVNC download failed" }
+          $ver = (Get-Item C:\uvnc_setup.exe).VersionInfo.FileVersion
+          Write-Output "setup version: $ver"
+          $p = Start-Process -FilePath "C:\uvnc_setup.exe" -ArgumentList "/verysilent","/sp-","/suppressmsgboxes","/norestart" -Wait -PassThru
+          Write-Output "setup exit: $($p.ExitCode)"
+          $base = "C:\Program Files\UltraVNC"
+          if (-not (Test-Path $base)) { $base = "C:\Program Files (x86)\UltraVNC" }
+          Write-Output "base: $base"
+          Get-ChildItem $base -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+          if (-not (Test-Path "$base\winvnc.exe")) { throw "winvnc.exe not found under $base" }
+          Set-Content -Path "C:\vnc\uvnc_base.txt" -Value $base
 
       - name: Configure password + start VNC server
         shell: powershell
         run: |
-          $paths = (Get-Content "C:\vnc\paths.txt" -Raw).Trim() -split "`n"
-          $server = ($paths[0] -replace '^server=','').Trim()
-          $passwdExe = ($paths[1] -replace '^pass=','').Trim()
-          Write-Output "server at: $server"
-          cmd /c "echo sshhmm19 | `"$passwdExe`" -f > C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
-          $fs = Get-Item "C:\vnc\passwd" -ErrorAction SilentlyContinue
-          if (-not $fs -or $fs.Length -eq 0) {
-            cmd /c "(echo sshhmm19 & echo sshhmm19) | `"$passwdExe`" C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
-          }
-          $fs = Get-Item "C:\vnc\passwd" -ErrorAction SilentlyContinue
-          Write-Output "passwd file size: $($fs.Length)"
-          Start-Process -FilePath $server -ArgumentList @("-PasswordFile","C:\vnc\passwd","-SecurityTypes","VncAuth","-localhost","no","-alwaysshared","-forever") -RedirectStandardOutput "C:\vnc\server.log" -RedirectStandardError "C:\vnc\server.err"
-          for ($i=0; $i -lt 20; $i++) {
+          $base = (Get-Content "C:\vnc\uvnc_base.txt" -Raw).Trim()
+          $reg = "HKLM:\SOFTWARE\UltraVNC\Global"
+          New-Item -Path $reg -Force | Out-Null
+          $key = @(23,82,107,6,35,78,88,7)
+          $pw = "sshhmm19"
+          $b = New-Object byte[] 8
+          for ($i=0; $i -lt 8; $i++) { $c = [int][char]$pw[$i]; $b[$i] = [byte]($c -bxor $key[$i]) }
+          New-ItemProperty -Path $reg -Name passwd -Value $b -PropertyType Binary -Force | Out-Null
+          New-ItemProperty -Path $reg -Name passwd2 -Value $b -PropertyType Binary -Force | Out-Null
+          New-ItemProperty -Path $reg -Name AuthRequired -Value 1 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $reg -Name PortNumber -Value 5900 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $reg -Name AllowLoopback -Value 1 -PropertyType DWord -Force | Out-Null
+          netsh advfirewall firewall add rule name=uvnc dir=in action=allow protocol=TCP localport=5900 | Out-Null
+          $svc = Get-Service -Name uvnc_service -ErrorAction SilentlyContinue
+          if ($svc) { Set-Service uvnc_service -StartupType Manual; Stop-Service uvnc_service -Force -ErrorAction SilentlyContinue }
+          Start-Process -FilePath "$base\winvnc.exe" -RedirectStandardError "C:\winvnc.err" -RedirectStandardOutput "C:\winvnc.out"
+          for ($i=0; $i -lt 25; $i++) {
             Start-Sleep -Seconds 2
-            $ln = Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue
-            if ($ln) { Write-Output "5900 LISTENING"; break }
+            if (Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue) { Write-Output "5900 LISTENING"; break }
           }
-          if (-not (Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue)) {
+          if (Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue) {
+            Write-Output "VNC UP on 5900"
+          } else {
             Write-Output "5900 NOT LISTENING"
-            Get-Content "C:\vnc\server.log" -ErrorAction SilentlyContinue
-            Get-Content "C:\vnc\server.err" -ErrorAction SilentlyContinue
+            Get-Content "C:\winvnc.err" -ErrorAction SilentlyContinue
           }
 
       - name: Install noVNC + websockify
@@ -90,10 +107,10 @@ jobs:
           Add-Content -Path "C:\vnc\info.txt" -Value "=== diag ==="
           Add-Content -Path "C:\vnc\info.txt" -Value ("5900=" + [bool](Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue))
           Add-Content -Path "C:\vnc\info.txt" -Value ("6080=" + [bool](Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue))
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== server.log ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\vnc\server.log" -Raw -ErrorAction SilentlyContinue)
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== server.err ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\vnc\server.err" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== winvnc.out ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\winvnc.out" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== winvnc.err ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\winvnc.err" -Raw -ErrorAction SilentlyContinue)
           Add-Content -Path "C:\vnc\info.txt" -Value "=== ws.log ==="
           Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\ws.log" -Raw -ErrorAction SilentlyContinue)
           Add-Content -Path "C:\vnc\info.txt" -Value "=== ws.err ==="
