@@ -1,0 +1,125 @@
+name: windows-novnc
+
+on:
+  workflow_dispatch:
+
+jobs:
+  wn:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - name: Download TigerVNC
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
+          $ok = $false
+          for ($try=1; $try -le 4; $try++) {
+            try {
+              $rel = Invoke-RestMethod "https://api.github.com/repos/TigerVNC/tigervnc/releases/latest" -Headers @{ "User-Agent" = "GHA" }
+              $asset = $rel.assets | Where-Object { $_.name -match '\.x86_64\.zip$' } | Select-Object -First 1
+              if ($asset) {
+                Write-Output "downloading: $($asset.name)"
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "C:\tigv.zip" -TimeoutSec 120
+                Expand-Archive "C:\tigv.zip" -DestinationPath "C:\vnc" -Force
+                $ok = $true
+                break
+              }
+            } catch { Write-Output "try $try failed: $($_.Exception.Message)" }
+            Start-Sleep -Seconds 10
+          }
+          if (-not $ok) {
+            Write-Output "API failed, pinning v1.15.0"
+            Invoke-WebRequest -Uri "https://github.com/TigerVNC/tigervnc/releases/download/v1.15.0/tigervnc-1.15.0.x86_64.zip" -OutFile "C:\tigv.zip" -TimeoutSec 120
+            Expand-Archive "C:\tigv.zip" -DestinationPath "C:\vnc" -Force
+          }
+          Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncserver.exe","vncpasswd.exe" | Select-Object -ExpandProperty FullName
+
+      - name: Configure password + start VNC server
+        shell: powershell
+        run: |
+          $dir = Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncserver.exe" | Select-Object -First 1
+          $servdir = Split-Path $dir.FullName
+          Write-Output "server at: $servdir"
+          $passwd = Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncpasswd.exe" | Select-Object -First 1
+          cmd /c "echo sshhmm19 | `"$($passwd.FullName)`" -f > C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
+          $fs = Get-Item "C:\vnc\passwd" -ErrorAction SilentlyContinue
+          if (-not $fs -or $fs.Length -eq 0) {
+            cmd /c "(echo sshhmm19 & echo sshhmm19) | `"$($passwd.FullName)`" C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
+          }
+          $fs = Get-Item "C:\vnc\passwd" -ErrorAction SilentlyContinue
+          Write-Output "passwd file size: $($fs.Length)"
+          Start-Process -FilePath $dir.FullName -ArgumentList @("-PasswordFile","C:\vnc\passwd","-SecurityTypes","VncAuth","-localhost","no","-alwaysshared","-forever") -RedirectStandardOutput "C:\vnc\server.log" -RedirectStandardError "C:\vnc\server.err"
+          for ($i=0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 2
+            $ln = Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue
+            if ($ln) { Write-Output "5900 LISTENING"; break }
+          }
+          if (-not (Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue)) {
+            Write-Output "5900 NOT LISTENING"
+            Get-Content "C:\vnc\server.log" -ErrorAction SilentlyContinue
+            Get-Content "C:\vnc\server.err" -ErrorAction SilentlyContinue
+          }
+
+      - name: Install noVNC + websockify
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz" -OutFile "C:\novnc.tar.gz"
+          New-Item -ItemType Directory -Path "C:\novnc" -Force | Out-Null
+          tar -xzf "C:\novnc.tar.gz" -C "C:\novnc"
+          python -m pip install --quiet websockify
+
+      - name: Start websockify
+        shell: powershell
+        run: |
+          $webdir = (Get-ChildItem -Path "C:\novnc" -Directory | Select-Object -First 1).FullName
+          Write-Output "webdir: $webdir"
+          Start-Process -FilePath "python" -ArgumentList @("-m","websockify","--web",$webdir,"6080","localhost:5900") -RedirectStandardOutput "C:\ws.log" -RedirectStandardError "C:\ws.err"
+          for ($i=0; $i -lt 15; $i++) {
+            Start-Sleep -Seconds 2
+            $ln = Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue
+            if ($ln) { Write-Output "6080 LISTENING"; break }
+          }
+          Get-Content "C:\ws.log" -ErrorAction SilentlyContinue
+          Get-Content "C:\ws.err" -ErrorAction SilentlyContinue
+
+      - name: Start cloudflared tunnel
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "C:\cloudflared.exe" -TimeoutSec 120
+          Start-Process -FilePath "C:\cloudflared.exe" -ArgumentList @("tunnel","--url","http://localhost:6080","--no-autoupdate") -RedirectStandardOutput "C:\cf.log" -RedirectStandardError "C:\cf.err"
+          $url = ""
+          for ($i=0; $i -lt 40; $i++) {
+            Start-Sleep -Seconds 3
+            $log = (Get-Content "C:\cf.log" -Raw -ErrorAction SilentlyContinue) + (Get-Content "C:\cf.err" -Raw -ErrorAction SilentlyContinue)
+            if ($log -match 'https://([a-z0-9-]+)\.trycloudflare\.com') { $url = $Matches[0]; break }
+          }
+          Write-Output "URL=$url"
+          Set-Content -Path "C:\vnc\info.txt" -Value "url=$url"
+          Add-Content -Path "C:\vnc\info.txt" -Value "password=sshhmm19"
+          Add-Content -Path "C:\vnc\info.txt" -Value ""
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== diag ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value ("5900=" + [bool](Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue))
+          Add-Content -Path "C:\vnc\info.txt" -Value ("6080=" + [bool](Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue))
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== server.log ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\vnc\server.log" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== server.err ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\vnc\server.err" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== ws.log ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\ws.log" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== ws.err ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\ws.err" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.log ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\cf.log" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.err ==="
+          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\cf.err" -Raw -ErrorAction SilentlyContinue)
+          Get-Content "C:\vnc\info.txt"
+
+      - name: Upload info
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-novnc
+          path: C:\vnc\info.txt
+
+      - name: Keep alive
+        shell: powershell
+        run: Start-Sleep -Seconds 21600
