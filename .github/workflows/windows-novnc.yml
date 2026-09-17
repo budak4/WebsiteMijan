@@ -11,18 +11,19 @@ jobs:
       - name: Diagnose VNC server download URLs
         shell: powershell
         run: |
+          Write-Output "TIGER exists check:"
+          Write-Output ("chocoutravnc:" + [bool](Test-Path "C:\Program Files\UltraVNC\winvnc.exe"))
           $urls = @(
-            "https://sourceforge.net/projects/ultravnc/files/latest/download",
-            "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.6/UltraVNC_1_4_3_6_X64_Setup.exe/download",
-            "https://sourceforge.net/projects/ultravnc/files/UltraVNC/1.4.3.1/UltraVNC_1_4_3_1_X64_Setup.exe/download",
-            "https://downloads.sourceforge.net/project/ultravnc/UltraVNC/1.4.3.6/UltraVNC_1_4_3_6_X64_Setup.exe",
-            "https://downloads.tigervnc.org/stable/tigervnc-1.16.2.x86_64.zip",
-            "https://downloads.tigervnc.org/stable/tigervnc-1.16.2.x86_64.exe",
-            "https://downloads.tigervnc.org/stable/tigervnc-1.15.0.x86_64.zip"
+            "https://www.uvnc.eu/download/132/UltraVNC_1_3_2_X64_Setup.exe",
+            "https://www.uvnc.eu/download/143/UltraVNC_1_4_3_X64_Setup.exe",
+            "https://www.uvnc.eu/download/1431/UltraVNC_1_4_31_X64_Setup.exe",
+            "https://www.uvnc.eu/download/1432/UltraVNC_1_4_32_X64_Setup.exe",
+            "https://www.uvnc.eu/download/1436/UltraVNC_1_4_36_X64_Setup.exe",
+            "https://uvnc.eu/download/132/UltraVNC_1_3_2_X64_Setup.exe"
           )
           foreach ($u in $urls) {
-            $r = curl.exe -sL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o "C:\dl_probe.bin" -w "%{http_code} %{size_download} %{url_effective}" -m 90 $u 2>&1
-            Write-Output ("PROBE " + $u + " => " + $r + " | size=" + ((Get-Item C:\dl_probe.bin -ErrorAction SilentlyContinue).Length))
+            $r = curl.exe -sIL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -w "%{http_code} %{size_download} %{url_effective}" -m 60 $u 2>&1 | Select-Object -Last 1
+            Write-Output ("PROBE " + $u + " => " + $r)
           }
 
       - name: Configure password + start VNC server
