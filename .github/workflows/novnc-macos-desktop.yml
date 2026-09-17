@@ -1,0 +1,66 @@
+name: novnc-macos-desktop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  mac-desktop:
+    runs-on: macos-latest
+    timeout-minutes: 360
+    steps:
+      - name: Enable built-in VNC (Screen Sharing)
+        run: |
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access on -allowAccessFor -allUsers -privs -all -restart -agent -menu
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw sshhmm1900
+          sleep 3
+          echo "=== vnc port ==="
+          sudo lsof -iTCP -sTCP:LISTEN -P -n | grep 5900 || true
+
+      - name: Install noVNC + websockify
+        run: |
+          python3 -m pip install --user -q websockify
+          curl -sL https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz | tar xz -C /tmp
+          ls -d /tmp/noVNC-1.5.0
+          ~/Library/Python/3.*/bin/websockify --version 2>/dev/null || python3 -c "import websockify; print('websockify ok')"
+
+      - name: Start noVNC
+        run: |
+          NOVNC_DIR=/tmp/noVNC-1.5.0
+          echo "novnc dir: $NOVNC_DIR"
+          export PATH="$HOME/Library/Python/3.*/bin:$PATH"
+          websockify --web="$NOVNC_DIR" 6080 localhost:5900 </dev/null >/tmp/ws.log 2>&1 &
+          for i in $(seq 1 10); do
+            netstat -an | grep -q '\.6080 .*LISTEN' && break
+            sleep 2
+          done
+          sleep 2
+          cat /tmp/ws.log
+          netstat -an | grep -E '\.5900|\.6080' | grep LISTEN || true
+          curl -s -o /dev/null -w "local6080=%{http_code}\n" http://localhost:6080/vnc.html || true
+
+      - name: Start cloudflared tunnel
+        run: |
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz -o /tmp/cfd.tgz
+          tar -xzf /tmp/cfd.tgz -C /tmp
+          chmod +x /tmp/cloudflared
+          /tmp/cloudflared tunnel --url http://localhost:6080 --no-autoupdate > /tmp/tunnel.log 2>&1 &
+          for i in $(seq 1 40); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/tunnel.log | head -1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          echo "$URL" > desktop-url.txt
+          echo "::notice title=Open Desktop (macOS)::Buka URL -> $URL  (password: sshhmm1900)"
+          tail -5 /tmp/tunnel.log
+
+      - name: Upload desktop URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-url
+          path: desktop-url.txt
+          include-hidden-files: true
+
+      - name: Keep alive
+        run: sleep 36000
