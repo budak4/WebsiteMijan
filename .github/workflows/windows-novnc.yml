@@ -12,26 +12,24 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
+          $cands = @(
+            "https://downloads.sourceforge.net/tigervnc/tigervnc-1.16.2.x86_64.zip",
+            "https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2.x86_64.zip",
+            "https://downloads.sourceforge.net/tigervnc/tigervnc-1.15.0.x86_64.zip",
+            "https://downloads.sourceforge.net/project/tigervnc/stable/1.15.0/tigervnc-1.15.0.x86_64.zip"
+          )
           $ok = $false
-          for ($try=1; $try -le 4; $try++) {
+          foreach ($u in $cands) {
             try {
-              $rel = Invoke-RestMethod "https://api.github.com/repos/TigerVNC/tigervnc/releases/latest" -Headers @{ "User-Agent" = "GHA" }
-              $asset = $rel.assets | Where-Object { $_.name -match '\.x86_64\.zip$' } | Select-Object -First 1
-              if ($asset) {
-                Write-Output "downloading: $($asset.name)"
-                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "C:\tigv.zip" -TimeoutSec 120
-                Expand-Archive "C:\tigv.zip" -DestinationPath "C:\vnc" -Force
-                $ok = $true
-                break
-              }
-            } catch { Write-Output "try $try failed: $($_.Exception.Message)" }
-            Start-Sleep -Seconds 10
+              Write-Output "trying: $u"
+              Invoke-WebRequest -Uri $u -OutFile "C:\tigv.zip" -TimeoutSec 180 -MaximumRedirection 8
+              Expand-Archive "C:\tigv.zip" -DestinationPath "C:\vnc" -Force
+              $ok = $true
+              Write-Output "OK downloaded $u"
+              break
+            } catch { Write-Output "failed: $($_.Exception.Message)" }
           }
-          if (-not $ok) {
-            Write-Output "API failed, pinning v1.15.0"
-            Invoke-WebRequest -Uri "https://github.com/TigerVNC/tigervnc/releases/download/v1.15.0/tigervnc-1.15.0.x86_64.zip" -OutFile "C:\tigv.zip" -TimeoutSec 120
-            Expand-Archive "C:\tigv.zip" -DestinationPath "C:\vnc" -Force
-          }
+          if (-not $ok) { throw "TigerVNC download failed" }
           Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncserver.exe","vncpasswd.exe" | Select-Object -ExpandProperty FullName
 
       - name: Configure password + start VNC server
