@@ -104,9 +104,16 @@ jobs:
           New-ItemProperty -Path $reg -Name AllowLoopback -Value 1 -PropertyType DWord -Force | Out-Null
           netsh advfirewall firewall add rule name=uvnc dir=in action=allow protocol=TCP localport=5900 | Out-Null
           $svc = Get-Service -Name uvnc_service -ErrorAction SilentlyContinue
-          if ($svc) { Set-Service uvnc_service -StartupType Manual; Stop-Service uvnc_service -Force -ErrorAction SilentlyContinue }
-          schtasks /create /tn uvnc /tr "`"$base\winvnc.exe`"" /sc once /st 00:00 /rl highest /f | Out-Null
-          schtasks /run /tn uvnc
+          if (-not $svc) { $svc = Get-Service -Name UltraVNC -ErrorAction SilentlyContinue }
+          if ($svc) {
+            Set-Service $svc.Name -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service $svc.Name -ErrorAction SilentlyContinue
+            Write-Output "started service $($svc.Name)"
+          } else {
+            Write-Output "no service, fallback to winvnc.exe direct"
+            schtasks /create /tn uvnc /tr "`"$base\winvnc.exe`"" /sc once /st 00:00 /rl highest /f | Out-Null
+            schtasks /run /tn uvnc
+          }
           Start-Sleep -Seconds 5
           for ($i=0; $i -lt 25; $i++) {
             Start-Sleep -Seconds 2
@@ -119,8 +126,8 @@ jobs:
             Write-Output $ns
           } else {
             Write-Output "5900 NOT LISTENING"
+            if ($svc) { Write-Output "service state: $($svc.Status)" }
             tasklist | Select-String "winvnc" | ForEach-Object { Write-Output $_ }
-            Get-Content "C:\winvnc.err" -ErrorAction SilentlyContinue
           }
 
       - name: Install noVNC + websockify
