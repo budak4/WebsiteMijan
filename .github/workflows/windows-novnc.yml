@@ -105,29 +105,18 @@ jobs:
         shell: powershell
         run: |
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "C:\cloudflared.exe" -TimeoutSec 120
-          Start-Process -FilePath "C:\cloudflared.exe" -ArgumentList @("tunnel","--url","http://localhost:6080","--no-autoupdate") -RedirectStandardOutput "C:\cf.log" -RedirectStandardError "C:\cf.err"
+          Set-Content -Path "C:\cftun.cmd" -Value "C:\cloudflared.exe tunnel --url http://localhost:6080 --no-autoupdate > C:\cf.log 2>&1"
+          schtasks /create /tn cftun /tr "C:\cftun.cmd" /sc once /st 00:00 /rl highest /f | Out-Null
+          schtasks /run /tn cftun
           $url = ""
-          for ($i=0; $i -lt 40; $i++) {
+          for ($i=0; $i -lt 45; $i++) {
             Start-Sleep -Seconds 3
-            $log = (Get-Content "C:\cf.log" -Raw -ErrorAction SilentlyContinue) + (Get-Content "C:\cf.err" -Raw -ErrorAction SilentlyContinue)
+            $log = Get-Content "C:\cf.log" -Raw -ErrorAction SilentlyContinue
             if ($log -match 'https://([a-z0-9-]+)\.trycloudflare\.com') { $url = $Matches[0]; break }
           }
           Write-Output "URL=$url"
           Set-Content -Path "C:\vnc\info.txt" -Value "url=$url"
           Add-Content -Path "C:\vnc\info.txt" -Value "password=sshhmm19"
-          Add-Content -Path "C:\vnc\info.txt" -Value ""
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== diag ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value ("5900=" + (netstat -ano | Select-String ":5900\s.*LISTEN"))
-          Add-Content -Path "C:\vnc\info.txt" -Value ("6080=" + (netstat -ano | Select-String ":6080\s.*LISTEN"))
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== tvnserver process ==="
-          tasklist | Select-String "tvn" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== python/websockify process ==="
-          tasklist | Select-String "python" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.log ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\cf.log" -Raw -ErrorAction SilentlyContinue)
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.err ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\cf.err" -Raw -ErrorAction SilentlyContinue)
-          Get-Content "C:\vnc\info.txt"
 
       - name: Upload info
         uses: actions/upload-artifact@v4
@@ -149,6 +138,15 @@ jobs:
           $out += tasklist | Select-String "python"
           $out += "=== vnc services ==="
           $out += Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc|uvnc" } | ForEach-Object { "svc " + $_.Name + " " + $_.Status }
+          $out += "=== tasklist cloudflared ==="
+          $out += tasklist | Select-String "cloudflared"
+          $url2 = (Get-Content "C:\vnc\info.txt" | Select-String "url=").Line -replace '^url=',''
+          if ($url2) {
+            $code = curl.exe -sS -m 20 -o NUL -w "%{http_code}" "$url2/vnc.html" 2>&1
+            $out += "selftest $url2/vnc.html -> $code"
+          } else {
+            $out += "selftest skipped (no url)"
+          }
           $out += "=== cf.log tail ==="
           $out += Get-Content "C:\cf.log" -Tail 20 -ErrorAction SilentlyContinue
           Set-Content "C:\vnc\final.txt" -Value $out
