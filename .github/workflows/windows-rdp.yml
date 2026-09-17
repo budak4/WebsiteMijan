@@ -29,7 +29,7 @@ jobs:
         shell: powershell
         run: |
           $ssh = "C:\Windows\System32\OpenSSH\ssh.exe"
-          Start-Process -FilePath $ssh -ArgumentList @("-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=/dev/null","-o","ServerAliveInterval=30","-R","0:localhost:3389","serveo.net") -RedirectStandardOutput "C:\serveo.log" -RedirectStandardError "C:\serveo.err"
+          Start-Process -FilePath $ssh -ArgumentList @("-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=/dev/null","-o","ConnectTimeout=30","-o","ServerAliveInterval=30","-R","0:localhost:3389","serveo.net") -RedirectStandardOutput "C:\serveo.log" -RedirectStandardError "C:\serveo.err"
           $serveoUrl = ""
           for ($i=0; $i -lt 40; $i++) {
             Start-Sleep -Seconds 3
@@ -37,6 +37,10 @@ jobs:
             if ($log -match '([a-z0-9-]+\.serveo\.net:(\d+))') { $serveoUrl = $Matches[1]; break }
           }
           Write-Output "SERVEO_URL=$serveoUrl"
+          Write-Output "--- serveo.log ---"
+          Get-Content 'C:\serveo.log' -ErrorAction SilentlyContinue
+          Write-Output "--- serveo.err ---"
+          Get-Content 'C:\serveo.err' -ErrorAction SilentlyContinue
           Set-Content -Path "C:\serveo-url.txt" -Value $serveoUrl
 
       - name: Install bore (best-effort, never fail)
@@ -62,7 +66,8 @@ jobs:
             }
             Start-Sleep -Seconds 12
           }
-          Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName || Write-Output "bore.exe not available"
+          $boreExe = Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($boreExe) { Write-Output "bore at: $($boreExe.FullName)" } else { Write-Output "bore.exe not available" }
 
       - name: Start bore tunnel (RDP 3389) - backup
         shell: powershell
