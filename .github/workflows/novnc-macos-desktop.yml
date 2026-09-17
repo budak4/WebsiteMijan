@@ -29,16 +29,17 @@ jobs:
         run: |
           NOVNC_DIR=/tmp/noVNC-1.5.0
           echo "novnc dir: $NOVNC_DIR"
-          export PATH="$HOME/Library/Python/3.*/bin:$PATH"
-          websockify --web="$NOVNC_DIR" 6080 localhost:5900 </dev/null >/tmp/ws.log 2>&1 &
+          WS=$(ls "$HOME"/Library/Python/3.*/bin/websockify 2>/dev/null | head -1)
+          if [ -z "$WS" ]; then WS="python3 -m websockify"; fi
+          echo "websockify: $WS"
+          $WS --web="$NOVNC_DIR" 6080 localhost:5900 </dev/null >/tmp/ws.log 2>&1 &
           for i in $(seq 1 10); do
-            netstat -an | grep -q '\.6080 .*LISTEN' && break
+            nc -z localhost 6080 && break
             sleep 2
           done
-          sleep 2
+          nc -z localhost 5900 && echo "vnc 5900 ok" || echo "vnc 5900 FAIL"
           cat /tmp/ws.log
           netstat -an | grep -E '\.5900|\.6080' | grep LISTEN || true
-          curl -s -o /dev/null -w "local6080=%{http_code}\n" http://localhost:6080/vnc.html || true
 
       - name: Start cloudflared tunnel
         run: |
