@@ -1,0 +1,18 @@
+name: macos-run
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  mac-run:
+    runs-on: macos-latest
+    steps:
+      - run: |
+          sw_vers
+          uname -a
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.memsize | awk '{print $1/1073741824 " GB RAM"}'
+          echo "Runner bersifat ephemeral (bukan VPS kekal)"
+          echo "Bilangan core: $(sysctl -n hw.ncpu)"
