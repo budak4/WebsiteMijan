@@ -25,53 +25,71 @@ jobs:
           Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue | Format-Table LocalAddress,LocalPort,State -AutoSize
           Get-Service TermService | Format-Table Name,Status,StartType -AutoSize
 
-      - name: Install bore (bore.pub tunnel)
-        shell: powershell
-        run: |
-          $rel = Invoke-RestMethod "https://api.github.com/repos/ekzhang/bore/releases/latest" -Headers @{ "User-Agent" = "GHA"; "Authorization" = "Bearer $env:GITHUB_TOKEN" }
-          $asset = $rel.assets | Where-Object { $_.name -match 'x86_64-windows-msvc.zip' } | Select-Object -First 1
-          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -match 'windows' } | Select-Object -First 1 }
-          Write-Output "downloading: $($asset.name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\bore.zip"
-          Expand-Archive "$env:TEMP\bore.zip" -DestinationPath "C:\bore" -Force
-          Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" | Select-Object -First 1 -ExpandProperty FullName
-
-      - name: Start bore tunnel (RDP 3389)
-        shell: powershell
-        run: |
-          $bore = (Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" | Select-Object -First 1).FullName
-          Start-Process -FilePath $bore -ArgumentList @("local","3389","--to","bore.pub") -RedirectStandardOutput "C:\bore\bore.log" -RedirectStandardError "C:\bore\bore.err"
-          $boreUrl = ""
-          for ($i=0; $i -lt 40; $i++) {
-            Start-Sleep -Seconds 3
-            $log = Get-Content "C:\bore\bore.log" -Raw -ErrorAction SilentlyContinue
-            if ($log -match 'bore\.pub:(\d+)') { $boreUrl = "bore.pub:$($matches[1])"; break }
-            $log = Get-Content "C:\bore\bore.err" -Raw -ErrorAction SilentlyContinue
-            if ($log -match 'bore\.pub:(\d+)') { $boreUrl = "bore.pub:$($matches[1])"; break }
-          }
-          Write-Output "BORE_URL=$boreUrl"
-          Set-Content -Path "C:\bore\bore-url.txt" -Value $boreUrl
-
-      - name: Start serveo tunnel (RDP 3389) as backup
+      - name: Start serveo tunnel (RDP 3389) - primary
         shell: powershell
         run: |
           $ssh = "C:\Windows\System32\OpenSSH\ssh.exe"
-          Start-Process -FilePath $ssh -ArgumentList @("-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=/dev/null","-o","ServerAliveInterval=30","-R","0:localhost:3389","serveo.net") -RedirectStandardOutput "C:\bore\serveo.log" -RedirectStandardError "C:\bore\serveo.err"
+          Start-Process -FilePath $ssh -ArgumentList @("-o","StrictHostKeyChecking=no","-o","UserKnownHostsFile=/dev/null","-o","ServerAliveInterval=30","-R","0:localhost:3389","serveo.net") -RedirectStandardOutput "C:\serveo.log" -RedirectStandardError "C:\serveo.err"
           $serveoUrl = ""
           for ($i=0; $i -lt 40; $i++) {
             Start-Sleep -Seconds 3
-            $log = (Get-Content "C:\bore\serveo.log" -Raw -ErrorAction SilentlyContinue) + (Get-Content "C:\bore\serveo.err" -Raw -ErrorAction SilentlyContinue)
+            $log = (Get-Content "C:\serveo.log" -Raw -ErrorAction SilentlyContinue) + (Get-Content "C:\serveo.err" -Raw -ErrorAction SilentlyContinue)
             if ($log -match '([a-z0-9-]+\.serveo\.net:(\d+))') { $serveoUrl = $Matches[1]; break }
           }
           Write-Output "SERVEO_URL=$serveoUrl"
-          Set-Content -Path "C:\bore\serveo-url.txt" -Value $serveoUrl
+          Set-Content -Path "C:\serveo-url.txt" -Value $serveoUrl
+
+      - name: Install bore (best-effort, never fail)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path "C:\bore" -Force | Out-Null
+          for ($try=1; $try -le 5; $try++) {
+            try {
+              $rel = Invoke-RestMethod "https://api.github.com/repos/ekzhang/bore/releases/latest" -Headers @{ "User-Agent" = "GHA" }
+              $asset = $rel.assets | Where-Object { $_.name -match 'windows-msvc.zip' } | Select-Object -First 1
+              if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -match 'windows' } | Select-Object -First 1 }
+              if ($asset) {
+                Write-Output "downloading: $($asset.name)"
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:TEMP\bore.zip" -TimeoutSec 90
+                Expand-Archive "$env:TEMP\bore.zip" -DestinationPath "C:\bore" -Force
+                Write-Output "bore installed"
+                break
+              } else {
+                Write-Output "no windows asset found"
+              }
+            } catch {
+              Write-Output "try $try failed: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 12
+          }
+          Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName || Write-Output "bore.exe not available"
+
+      - name: Start bore tunnel (RDP 3389) - backup
+        shell: powershell
+        run: |
+          $bore = Get-ChildItem -Path "C:\bore" -Recurse -Filter "bore.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          $boreUrl = ""
+          if ($bore) {
+            Start-Process -FilePath $bore -ArgumentList @("local","3389","--to","bore.pub") -RedirectStandardOutput "C:\bore.log" -RedirectStandardError "C:\bore.err"
+            for ($i=0; $i -lt 40; $i++) {
+              Start-Sleep -Seconds 3
+              $log = Get-Content "C:\bore.log" -Raw -ErrorAction SilentlyContinue
+              if ($log -match 'bore\.pub:(\d+)') { $boreUrl = "bore.pub:$($matches[1])"; break }
+              $log = Get-Content "C:\bore.err" -Raw -ErrorAction SilentlyContinue
+              if ($log -match 'bore\.pub:(\d+)') { $boreUrl = "bore.pub:$($matches[1])"; break }
+            }
+            Write-Output "BORE_URL=$boreUrl"
+          } else {
+            Write-Output "bore.exe not installed, skipping"
+          }
+          Set-Content -Path "C:\bore-url.txt" -Value $boreUrl
 
       - name: Collect RDP info
         shell: powershell
         run: |
           $info = @()
-          $info += "host_bore=$((Get-Content 'C:\bore\bore-url.txt' -Raw -ErrorAction SilentlyContinue).Trim())"
-          $info += "host_serveo=$((Get-Content 'C:\bore\serveo-url.txt' -Raw -ErrorAction SilentlyContinue).Trim())"
+          $info += "host_serveo=$((Get-Content 'C:\serveo-url.txt' -Raw -ErrorAction SilentlyContinue).Trim())"
+          $info += "host_bore=$((Get-Content 'C:\bore-url.txt' -Raw -ErrorAction SilentlyContinue).Trim())"
           $info += "user=runneradmin"
           $info += "pass=GhaRdp#2709"
           $info += ""
@@ -81,22 +99,22 @@ jobs:
           $svc = Get-Service TermService -ErrorAction SilentlyContinue
           $info += ("TermService: " + $svc.Status)
           $info += ""
-          $info += "=== bore.log ==="
-          $info += (Get-Content 'C:\bore\bore.log' -Raw -ErrorAction SilentlyContinue)
-          $info += "=== bore.err ==="
-          $info += (Get-Content 'C:\bore\bore.err' -Raw -ErrorAction SilentlyContinue)
           $info += "=== serveo.log ==="
-          $info += (Get-Content 'C:\bore\serveo.log' -Raw -ErrorAction SilentlyContinue)
+          $info += (Get-Content 'C:\serveo.log' -Raw -ErrorAction SilentlyContinue)
           $info += "=== serveo.err ==="
-          $info += (Get-Content 'C:\bore\serveo.err' -Raw -ErrorAction SilentlyContinue)
-          $info | Set-Content "C:\bore\rdp-url.txt"
-          Get-Content "C:\bore\rdp-url.txt"
+          $info += (Get-Content 'C:\serveo.err' -Raw -ErrorAction SilentlyContinue)
+          $info += "=== bore.log ==="
+          $info += (Get-Content 'C:\bore.log' -Raw -ErrorAction SilentlyContinue)
+          $info += "=== bore.err ==="
+          $info += (Get-Content 'C:\bore.err' -Raw -ErrorAction SilentlyContinue)
+          $info | Set-Content "C:\rdp-url.txt"
+          Get-Content "C:\rdp-url.txt"
 
       - name: Upload RDP URL
         uses: actions/upload-artifact@v4
         with:
           name: rdp-url
-          path: C:\bore\rdp-url.txt
+          path: C:\rdp-url.txt
 
       - name: Keep alive
         shell: powershell
