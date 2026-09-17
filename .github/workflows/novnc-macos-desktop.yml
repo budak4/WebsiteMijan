@@ -20,7 +20,7 @@ jobs:
 
       - name: Install noVNC + websockify
         run: |
-          python3 -m pip install --user -q websockify
+          python3 -m pip install --user -q --break-system-packages websockify
           curl -sL https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.tar.gz | tar xz -C /tmp
           ls -d /tmp/noVNC-1.5.0
           ~/Library/Python/3.*/bin/websockify --version 2>/dev/null || python3 -c "import websockify; print('websockify ok')"
