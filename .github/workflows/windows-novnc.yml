@@ -83,11 +83,10 @@ jobs:
       - name: Test VNC auth over loopback
         shell: powershell
         run: |
-          cmd /c "python -c ""import base64;open('C:/vnc/vnctest.py','w').write(base64.b64decode('ZnJvbSB2bmNkb3Rvb2wgaW1wb3J0IGFwaQp0cnk6CiAgICBjID0gYXBpLmNvbm5lY3QoJ2xvY2FsaG9zdDo6NTkwMCcsIHBhc3N3b3JkPSdzc2hobW0xOScsIHRpbWVvdXQ9MzApCiAgICBwcmludCgnQVVUSF9PSycpCiAgICBjLmRpc2Nvbm5lY3QoKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwcmludCgnQVVUSF9GQUlMICcgKyB0eXBlKGUpLl9fbmFtZV9fICsgJzogJyArIHN0cihlKSkK'))"" > C:\vnc\w1.txt 2>&1"
           pip install -q vncdotool 2>$null | Out-Null
+          python -c "import base64;open('C:/vnc/vnctest.py','w').write(base64.b64decode('aW1wb3J0IHN5cwpmcm9tIHZuY2RvdG9vbCBpbXBvcnQgYXBpCm91dCA9IHN5cy5hcmd2WzFdCnJlcyA9ICdFTVBUWScKdHJ5OgogICAgYyA9IGFwaS5jb25uZWN0KCdsb2NhbGhvc3Q6OjU5MDAnLCBwYXNzd29yZD0nc3NoaG1tMTknLCB0aW1lb3V0PTI1KQogICAgcmVzID0gJ0FVVEhfT0snCiAgICBjLmRpc2Nvbm5lY3QoKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICByZXMgPSAnQVVUSF9GQUlMICcgKyB0eXBlKGUpLl9fbmFtZV9fICsgJzogJyArIHN0cihlKQpvcGVuKG91dCwgJ3cnKS53cml0ZShyZXMpCg=='))" 2>$null
           $tvn = (Get-Content "C:\vnc\tvn.txt" -Raw).Trim()
           $encPlain = [byte[]](0x41,0xB6,0xB1,0x0C,0xB9,0xF7,0x9D,0x44)
-          $encVintage = [byte[]](0x27,0x84,0xAF,0xB3,0xAA,0x74,0x74,0x8F)
           $roots = @(
             "HKCU:\Software\TightVNC\Server",
             "HKLM:\Software\TightVNC\Server",
@@ -113,18 +112,18 @@ jobs:
             }
           }
           Restart-Tvn
-          cmd /c "python C:\vnc\vnctest.py > C:\vnc\t1.txt 2>&1"
-          $o1 = (Get-Content C:\vnc\t1.txt -Raw -ErrorAction SilentlyContinue).Trim()
+          python C:\vnc\vnctest.py C:\vnc\t1.txt 2>$null
+          $o1 = Get-Content C:\vnc\t1.txt -Raw -ErrorAction SilentlyContinue
           Write-Output "attempt1(vintage): $o1"
           $verdict = "VINTAGE"
           if ($o1 -match "AUTH_OK") { $verdict = "VINTAGE_OK" }
           else {
             Set-Pass $encPlain
             Restart-Tvn
-            cmd /c "python C:\vnc\vnctest.py > C:\vnc\t2.txt 2>&1"
-            $o2 = (Get-Content C:\vnc\t2.txt -Raw -ErrorAction SilentlyContinue).Trim()
+            python C:\vnc\vnctest.py C:\vnc\t2.txt 2>$null
+            $o2 = Get-Content C:\vnc\t2.txt -Raw -ErrorAction SilentlyContinue
             Write-Output "attempt2(plain): $o2"
-            if ($o2 -match "AUTH_OK") { $verdict = "PLAIN_OK" } else { $verdict = $o1 + " || " + $o2 }
+            if ($o2 -match "AUTH_OK") { $verdict = "PLAIN_OK" } else { $verdict = "$o1 || $o2" }
           }
           Write-Output "VERDICT=$verdict"
           Set-Content -Path "C:\vnc\auth.txt" -Value "VERDICT=$verdict"
@@ -201,10 +200,10 @@ jobs:
           $out += "=== tasklist cloudflared ==="
           $out += tasklist | Select-String "cloudflared"
           if (Test-Path "C:\vnc\vnctest.py") {
-            cmd /c "python C:\vnc\vnctest.py > C:\vnc\w4.txt 2>&1"
-            $add = @("final_out: " + ((Get-Content C:\vnc\w4.txt -Raw -ErrorAction SilentlyContinue).Trim()))
-            Add-Content -Path "C:\vnc\auth.txt" -Value $add -ErrorAction SilentlyContinue
-            $out += ("FINAL_AUTH=" + ((Get-Content C:\vnc\w4.txt -Raw -ErrorAction SilentlyContinue).Trim()))
+            python C:\vnc\vnctest.py C:\vnc\w4.txt 2>$null
+            $r2 = Get-Content C:\vnc\w4.txt -Raw -ErrorAction SilentlyContinue
+            Add-Content -Path "C:\vnc\auth.txt" -Value ("final=" + $r2) -ErrorAction SilentlyContinue
+            $out += ("FINAL_AUTH=" + $r2)
           } else {
             $out += "vnctest.py missing"
           }
