@@ -39,9 +39,16 @@ jobs:
             [ -n "$URL" ] && break
             sleep 2
           done
-          echo "DESKTOP_URL=$URL"
           echo "DESKTOP_URL=$URL" >> "$GITHUB_ENV"
+          echo "$URL" > desktop-url.txt
           echo "::notice title=Open Desktop::Buka URL ini dalam browser (password: sshhmm1900) -> $URL"
+
+      - name: Upload desktop URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-url
+          path: desktop-url.txt
+          include-hidden-files: true
 
       - name: Keep alive
         run: sleep 36000
