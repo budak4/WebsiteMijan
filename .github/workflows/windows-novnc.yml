@@ -8,45 +8,35 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: Download TigerVNC
+      - name: Install TigerVNC (via chocolatey)
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
-          $cands = @(
-            "https://downloads.sourceforge.net/tigervnc/tigervnc-1.16.2.x86_64.zip",
-            "https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2.x86_64.zip",
-            "https://downloads.sourceforge.net/tigervnc/tigervnc-1.15.0.x86_64.zip",
-            "https://downloads.sourceforge.net/project/tigervnc/stable/1.15.0/tigervnc-1.15.0.x86_64.zip"
-          )
-          $ok = $false
-          foreach ($u in $cands) {
-            try {
-              Write-Output "trying: $u"
-              Invoke-WebRequest -Uri $u -OutFile "C:\tigv.zip" -TimeoutSec 180 -MaximumRedirection 8
-              Expand-Archive "C:\tigv.zip" -DestinationPath "C:\vnc" -Force
-              $ok = $true
-              Write-Output "OK downloaded $u"
-              break
-            } catch { Write-Output "failed: $($_.Exception.Message)" }
-          }
-          if (-not $ok) { throw "TigerVNC download failed" }
-          Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncserver.exe","vncpasswd.exe" | Select-Object -ExpandProperty FullName
+          choco install tigervnc -y --no-progress
+          if ($LASTEXITCODE -ne 0) { choco install tigervnc -y --force --no-progress }
+          $vncserver = Get-ChildItem -Recurse -Path "C:\Program Files\TigerVNC" -Filter "vncserver.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $vncserver) { $vncserver = (Get-Command vncserver -ErrorAction SilentlyContinue).Source }
+          $vncpass = Get-ChildItem -Recurse -Path "C:\Program Files\TigerVNC" -Filter "vncpasswd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $vncpass) { $vncpass = (Get-Command vncpasswd -ErrorAction SilentlyContinue).Source }
+          if (-not $vncserver -or -not $vncpass) { throw "TigerVNC binaries not found: server=$vncserver pass=$vncpass" }
+          Set-Content -Path "C:\vnc\paths.txt" -Value "server=$vncserver`npass=$vncpass"
+          Write-Output "server=$vncserver"
+          Write-Output "pass=$vncpass"
 
       - name: Configure password + start VNC server
         shell: powershell
         run: |
-          $dir = Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncserver.exe" | Select-Object -First 1
-          $servdir = Split-Path $dir.FullName
-          Write-Output "server at: $servdir"
-          $passwd = Get-ChildItem -Recurse -Path "C:\vnc" -Include "vncpasswd.exe" | Select-Object -First 1
-          cmd /c "echo sshhmm19 | `"$($passwd.FullName)`" -f > C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
+          $paths = (Get-Content "C:\vnc\paths.txt" -Raw).Trim() -split "`n"
+          $server = ($paths[0] -replace '^server=','').Trim()
+          $passwdExe = ($paths[1] -replace '^pass=','').Trim()
+          Write-Output "server at: $server"
+          cmd /c "echo sshhmm19 | `"$passwdExe`" -f > C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
           $fs = Get-Item "C:\vnc\passwd" -ErrorAction SilentlyContinue
           if (-not $fs -or $fs.Length -eq 0) {
-            cmd /c "(echo sshhmm19 & echo sshhmm19) | `"$($passwd.FullName)`" C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
+            cmd /c "(echo sshhmm19 & echo sshhmm19) | `"$passwdExe`" C:\vnc\passwd" 2>&1 | ForEach-Object { Write-Output $_ }
           }
           $fs = Get-Item "C:\vnc\passwd" -ErrorAction SilentlyContinue
           Write-Output "passwd file size: $($fs.Length)"
-          Start-Process -FilePath $dir.FullName -ArgumentList @("-PasswordFile","C:\vnc\passwd","-SecurityTypes","VncAuth","-localhost","no","-alwaysshared","-forever") -RedirectStandardOutput "C:\vnc\server.log" -RedirectStandardError "C:\vnc\server.err"
+          Start-Process -FilePath $server -ArgumentList @("-PasswordFile","C:\vnc\passwd","-SecurityTypes","VncAuth","-localhost","no","-alwaysshared","-forever") -RedirectStandardOutput "C:\vnc\server.log" -RedirectStandardError "C:\vnc\server.err"
           for ($i=0; $i -lt 20; $i++) {
             Start-Sleep -Seconds 2
             $ln = Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue
