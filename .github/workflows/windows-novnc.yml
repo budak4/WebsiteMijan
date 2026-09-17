@@ -35,36 +35,24 @@ jobs:
           $tvn = (Get-Content "C:\vnc\tvn.txt" -Raw).Trim()
           $reg = "HKCU:\Software\TightVNC\Server"
           New-Item -Path $reg -Force | Out-Null
-          $pwB = "C:\vnc\pw.bin"
-          Remove-Item $pwB -ErrorAction SilentlyContinue
-          Write-Output "trying -controlpasswd with piped password"
-          $o1 = cmd /c "(echo sshhmm19 & echo sshhmm19) | `"$tvn`" -controlpasswd $pwB 2>&1"
-          $o1 | ForEach-Object { Write-Output "ctrlpw: $_" }
-          if (Test-Path $pwB) {
-            $blob = [System.IO.File]::ReadAllBytes($pwB)
-            Write-Output ("pw blob size: " + $blob.Length + " hex: " + (($blob | ForEach-Object { $_.ToString("X2") }) -join ""))
-            Set-ItemProperty -Path $reg -Name ControlPassword -Value $blob -PropertyType Binary -Force -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $reg -Name UseControlPassword -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue
-          } else {
-            Write-Output "-controlpasswd produced no file; using fixed-key DES in registry"
-            function Des-Ecb($data, $key) {
-              $des = [System.Security.Cryptography.DES]::Create()
-              $des.Mode = [System.Security.Cryptography.CipherMode]::ECB
-              $des.Padding = [System.Security.Cryptography.PaddingMode]::None
-              $des.Key = $key
-              $t = $des.CreateEncryptor().TransformFinalBlock($data, 0, $data.Length)
-              $des.Dispose()
-              return $t
-            }
-            $key = [byte[]](23,82,107,6,35,78,88,7)
-            $pw = "sshhmm19"
-            $pt = New-Object byte[] 8
-            for ($i=0; $i -lt 8; $i++) { $pt[$i] = [byte][char]$pw[$i] }
-            $enc = Des-Ecb $pt $key
-            Write-Output ("DES hex: " + (($enc | ForEach-Object { $_.ToString("X2") }) -join ""))
-            Set-ItemProperty -Path $reg -Name ControlPassword -Value $enc -PropertyType Binary -Force
-            Set-ItemProperty -Path $reg -Name UseControlPassword -Value 1 -PropertyType DWord -Force
+          Write-Output "writing fixed-key DES (ControlPassword) to registry"
+          function Des-Ecb($data, $key) {
+            $des = [System.Security.Cryptography.DES]::Create()
+            $des.Mode = [System.Security.Cryptography.CipherMode]::ECB
+            $des.Padding = [System.Security.Cryptography.PaddingMode]::None
+            $des.Key = $key
+            $t = $des.CreateEncryptor().TransformFinalBlock($data, 0, $data.Length)
+            $des.Dispose()
+            return $t
           }
+          $key = [byte[]](23,82,107,6,35,78,88,7)
+          $pw = "sshhmm19"
+          $pt = New-Object byte[] 8
+          for ($i=0; $i -lt 8; $i++) { $pt[$i] = [byte][char]$pw[$i] }
+          $enc = Des-Ecb $pt $key
+          Write-Output ("DES hex: " + (($enc | ForEach-Object { $_.ToString("X2") }) -join ""))
+          Set-ItemProperty -Path $reg -Name ControlPassword -Value $enc -PropertyType Binary -Force
+          Set-ItemProperty -Path $reg -Name UseControlPassword -Value 1 -PropertyType DWord -Force
           New-ItemProperty -Path $reg -Name RfbPort -Value 5900 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
           netsh advfirewall firewall add rule name=tvn dir=in action=allow protocol=TCP localport=5900 | Out-Null
           schtasks /create /tn tvn /tr "`"$tvn`" -run" /sc once /st 00:00 /rl highest /f | Out-Null
@@ -83,7 +71,6 @@ jobs:
             Write-Output "5900 NOT LISTENING"
             tasklist | Select-String "tvn" | ForEach-Object { Write-Output $_ }
             Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc" } | ForEach-Object { Write-Output ("svc " + $_.Name + " " + $_.Status) }
-            $sc = sc.exe query tvnserver 2>&1; $sc | ForEach-Object { Write-Output $_ }
           }
 
       - name: Install noVNC + websockify
