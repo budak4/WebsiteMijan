@@ -93,14 +93,14 @@ jobs:
         run: |
           pip install --quiet vncdotool --disable-pip-version-check 2>&1 | ForEach-Object { Write-Output "pip: $_" }
           $r = & python -c "import sys; sys.stdout.write('start\\n');
-from vncdotool import api
-try:
-    c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
-    print('AUTH_OK')
-    c.disconnect()
-except Exception as e:
-    print('AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
-" 2>&1
+          from vncdotool import api
+          try:
+              c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
+              print('AUTH_OK')
+              c.disconnect()
+          except Exception as e:
+              print('AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
+          " 2>&1
           $r | ForEach-Object { Write-Output "vnc: $_" }
           if ($r -match "AUTH_OK") { Write-Output "VNC_AUTH_RESULT=OK" } else { Write-Output "VNC_AUTH_RESULT=FAIL" }
 
@@ -172,13 +172,13 @@ except Exception as e:
           $out += "=== tasklist cloudflared ==="
           $out += tasklist | Select-String "cloudflared"
           $r2 = & python -c "from vncdotool import api
-try:
-    c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
-    print('FINAL_AUTH_OK')
-    c.disconnect()
-except Exception as e:
-    print('FINAL_AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
-" 2>&1
+          try:
+              c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
+              print('FINAL_AUTH_OK')
+              c.disconnect()
+          except Exception as e:
+              print('FINAL_AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
+          " 2>&1
           $out += $r2
           $url2 = (Get-Content "C:\vnc\info.txt" | Select-String "url=").Line -replace '^url=',''
           if ($url2) {
