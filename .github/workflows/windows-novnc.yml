@@ -33,9 +33,7 @@ jobs:
         shell: powershell
         run: |
           $tvn = (Get-Content "C:\vnc\tvn.txt" -Raw).Trim()
-          $reg = "HKCU:\Software\TightVNC\Server"
-          New-Item -Path $reg -Force | Out-Null
-          Write-Output "writing fixed-key DES (ControlPassword) to registry"
+          Write-Output "writing fixed-key DES to all possible registry roots"
           function Des-Ecb($data, $key) {
             $des = [System.Security.Cryptography.DES]::Create()
             $des.Mode = [System.Security.Cryptography.CipherMode]::ECB
@@ -51,10 +49,27 @@ jobs:
           for ($i=0; $i -lt 8; $i++) { $pt[$i] = [byte][char]$pw[$i] }
           $enc = Des-Ecb $pt $key
           Write-Output ("DES hex: " + (($enc | ForEach-Object { $_.ToString("X2") }) -join ""))
-          New-ItemProperty -Path $reg -Name ControlPassword -Value $enc -PropertyType Binary -Force | Out-Null
-          New-ItemProperty -Path $reg -Name UseControlPassword -Value 1 -PropertyType DWord -Force | Out-Null
-          New-ItemProperty -Path $reg -Name RfbPort -Value 5900 -PropertyType DWord -Force | Out-Null
+          $roots = @(
+            "HKCU:\Software\TightVNC\Server",
+            "HKLM:\Software\TightVNC\Server",
+            "HKLM:\Software\ORL\WinVNC3\Default"
+          )
+          foreach ($r in $roots) {
+            New-Item -Path $r -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name AllowLoopback -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name LoopbackOnly -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name AuthRequired -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name Password -Value $enc -PropertyType Binary -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name PasswordViewOnly -Value $enc -PropertyType Binary -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name ControlPassword -Value $enc -PropertyType Binary -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name UseControlPassword -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name RfbPort -Value 5900 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $r -Name PortNumber -Value 5900 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            Write-Output "wrote to $r"
+          }
           netsh advfirewall firewall add rule name=tvn dir=in action=allow protocol=TCP localport=5900 | Out-Null
+          Stop-Process -Name tvnserver -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
           schtasks /create /tn tvn /tr "`"$tvn`" -run" /sc once /st 00:00 /rl highest /f | Out-Null
           schtasks /run /tn tvn
           Start-Sleep -Seconds 8
@@ -72,6 +87,22 @@ jobs:
             tasklist | Select-String "tvn" | ForEach-Object { Write-Output $_ }
             Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc" } | ForEach-Object { Write-Output ("svc " + $_.Name + " " + $_.Status) }
           }
+
+      - name: Test VNC auth over loopback
+        shell: powershell
+        run: |
+          pip install --quiet vncdotool --disable-pip-version-check 2>&1 | ForEach-Object { Write-Output "pip: $_" }
+          $r = & python -c "import sys; sys.stdout.write('start\\n');
+from vncdotool import api
+try:
+    c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
+    print('AUTH_OK')
+    c.disconnect()
+except Exception as e:
+    print('AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
+" 2>&1
+          $r | ForEach-Object { Write-Output "vnc: $_" }
+          if ($r -match "AUTH_OK") { Write-Output "VNC_AUTH_RESULT=OK" } else { Write-Output "VNC_AUTH_RESULT=FAIL" }
 
       - name: Install noVNC + websockify
         shell: powershell
@@ -140,6 +171,15 @@ jobs:
           $out += Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc|uvnc" } | ForEach-Object { "svc " + $_.Name + " " + $_.Status }
           $out += "=== tasklist cloudflared ==="
           $out += tasklist | Select-String "cloudflared"
+          $r2 = & python -c "from vncdotool import api
+try:
+    c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
+    print('FINAL_AUTH_OK')
+    c.disconnect()
+except Exception as e:
+    print('FINAL_AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
+" 2>&1
+          $out += $r2
           $url2 = (Get-Content "C:\vnc\info.txt" | Select-String "url=").Line -replace '^url=',''
           if ($url2) {
             $code = curl.exe -sS -m 20 -o NUL -w "%{http_code}" "$url2/vnc.html" 2>&1
