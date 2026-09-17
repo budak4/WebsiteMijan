@@ -53,20 +53,7 @@ jobs:
             echo "=== ports ===";
             netstat -an | grep -E '\.5900|\.6080' | grep LISTEN || true;
             echo "=== rfb handshake test ===";
-            python3 - <<'EOF'
-            import socket
-            try:
-                s = socket.create_connection(('localhost', 5900), timeout=5)
-                s.settimeout(5)
-                v = s.recv(12)
-                print('server version:', v)
-                s.sendall(b'RFB 003.008\n')
-                n = s.recv(1)[0]
-                print('security types count:', n)
-                print('types:', s.recv(n))
-            except Exception as e:
-                print('RFB TEST FAILED:', repr(e))
-            EOF
+            python3 -c "import socket; s=socket.create_connection(('localhost',5900),timeout=5); v=s.recv(12); print('server version:',v); s.sendall(b'RFB 003.008'+chr(10)); n=s.recv(1)[0]; print('sectypes count:',n,'types:',s.recv(n))" 2>&1 || echo "RFB TEST FAILED";
             echo "=== websockify log ===";
             cat /tmp/ws.log 2>/dev/null || true;
           } > /tmp/diag.txt 2>&1
