@@ -8,126 +8,82 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
     steps:
-      - name: Install UltraVNC
+      - name: Install TightVNC
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path "C:\vnc" -Force | Out-Null
-          choco install ultravnc -y --no-progress 2>&1 | ForEach-Object { Write-Output "choco: $_" }
-          Write-Output "choco_exit=$LASTEXITCODE"
-          $base = ""
-          foreach ($d in @(
-            "C:\Program Files\uvnc bvba\UltraVNC",
-            "C:\Program Files (x86)\uvnc bvba\UltraVNC",
-            "C:\Program Files\UltraVNC",
-            "C:\Program Files (x86)\UltraVNC"
-          )) {
-            if (Test-Path "$d\winvnc.exe") { $base = $d; break }
+          Invoke-WebRequest -Uri "https://github.com/hello-smile6/NoVNC-windows/releases/download/python/tightvnc.tgz" -OutFile "C:\tightvnc.tgz" -TimeoutSec 300
+          Write-Output ("tgz size: " + (Get-Item C:\tightvnc.tgz).Length)
+          New-Item -ItemType Directory -Path "C:\tvnc" -Force | Out-Null
+          tar -xzf "C:\tightvnc.tgz" -C "C:\tvnc"
+          Get-ChildItem -Path "C:\tvnc" -Recurse -File | Select-Object -First 40 -ExpandProperty FullName
+          $tvn = Get-ChildItem -Path "C:\tvnc" -Recurse -Filter "tvnserver.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          $tvnCtrl = Get-ChildItem -Path "C:\tvnc" -Recurse -Filter "TVNControl.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          Write-Output "tvnserver: $tvn"
+          Write-Output "TVNControl: $tvnCtrl"
+          if (-not $tvn) {
+            $tvn = Get-ChildItem -Path "C:\tvnc" -Recurse -Filter "tvnserver*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           }
-          if (-not $base) {
-            $hit = Get-ChildItem -Path "C:\Program Files" -Recurse -Filter "winvnc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($hit) { $base = $hit.DirectoryName }
-          }
-          if (-not $base) {
-            Write-Output "choco yield no winvnc, trying uvnc.eu 1.3.2"
-            Invoke-WebRequest -Uri "https://www.uvnc.eu/download/132/UltraVNC_1_3_2_X64_Setup.exe" -OutFile "C:\uvnc_setup.exe" -TimeoutSec 300 -MaximumRedirection 10
-            Write-Output ("setup size: " + (Get-Item C:\uvnc_setup.exe).Length)
-            $p = Start-Process -FilePath "C:\uvnc_setup.exe" -ArgumentList "/VERYSILENT","/SP-","/SUPPRESSMSGBOXES","/NOREBOOT" -Wait -PassThru
-            Write-Output "setup exit: $($p.ExitCode)"
-            foreach ($d in @("C:\Program Files\uvnc bvba\UltraVNC","C:\Program Files\UltraVNC","C:\Program Files (x86)\UltraVNC")) {
-              if (Test-Path "$d\winvnc.exe") { $base = $d; break }
-            }
-            if (-not $base) {
-              $hit = Get-ChildItem -Path "C:\Program Files" -Recurse -Filter "winvnc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($hit) { $base = $hit.DirectoryName }
-            }
-          }
-          Write-Output "UVNC base: $base"
-          if (-not $base) { throw "winvnc.exe nowhere to be found" }
-          Set-Content -Path "C:\vnc\uvnc_base.txt" -Value $base
-          $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo("$base\winvnc.exe")
-          Write-Output "FileVersion: $($v.FileVersion) ProductVersion: $($v.ProductVersion)"
-          Add-Content -Path "C:\vnc\uvnc_base.txt" -Value $v.FileVersion
-          Add-Content -Path "C:\vnc\uvnc_base.txt" -Value $v.ProductVersion
+          if (-not $tvn) { throw "tvnserver.exe not found" }
+          Set-Content -Path "C:\vnc\tvn.txt" -Value $tvn
+          $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($tvn)
+          Write-Output "tvnserver FileVersion: $($v.FileVersion) ProductVersion: $($v.ProductVersion)"
 
-      - name: Configure password + start VNC server
+      - name: Configure password + start TightVNC
         shell: powershell
         run: |
-          $lines = Get-Content "C:\vnc\uvnc_base.txt"
-          $base = $lines[0].Trim()
-          $filever = $lines[1].Trim()
-          Write-Output "winvnc filever: $filever"
-          function Des-Ecb($data, $key) {
-            $des = [System.Security.Cryptography.DES]::Create()
-            $des.Mode = [System.Security.Cryptography.CipherMode]::ECB
-            $des.Padding = [System.Security.Cryptography.PaddingMode]::None
-            $des.Key = $key
-            $t = $des.CreateEncryptor().TransformFinalBlock($data, 0, $data.Length)
-            $des.Dispose()
-            return $t
-          }
-          $key = [byte[]](23,82,107,6,35,78,88,7)
-          $pw = "sshhmm19"
-          $pt = New-Object byte[] 8
-          for ($i=0; $i -lt 8; $i++) { $pt[$i] = [byte][char]$pw[$i] }
-          $enc = Des-Ecb $pt $key
-          $hex = ($enc | ForEach-Object { $_.ToString("X2") }) -join ""
-          Write-Output ("encrypted passwd hex: " + $hex)
-          New-Item -ItemType Directory -Path (Split-Path $base) -Force | Out-Null
-          $ini = Join-Path $base "ultravnc.ini"
-          $sec = @(
-            "[Permissions]",
-            "[admin]",
-            "FileTransferEnabled=1",
-            "FTUserImpersonation=1",
-            "BlankMonitorEnabled=0",
-            "AllowLoopback=1",
-            "AllowShutdown=1",
-            "AllowProperties=1",
-            "DisableTrayIcon=0",
-            "",
-            "[UltraVNC]",
-            "passwd=$hex",
-            "passwd2=$hex",
-            "AuthRequired=1",
-            "PortNumber=5900",
-            "AllowLoopback=1"
-          )
-          Set-Content -Path $ini -Value $sec
-          Write-Output "wrote $ini"
-          Get-Content $ini
-          $reg = "HKLM:\SOFTWARE\UltraVNC\Global"
+          $tvn = (Get-Content "C:\vnc\tvn.txt" -Raw).Trim()
+          $reg = "HKCU:\Software\TightVNC\Server"
           New-Item -Path $reg -Force | Out-Null
-          New-ItemProperty -Path $reg -Name passwd -Value $enc -PropertyType Binary -Force | Out-Null
-          New-ItemProperty -Path $reg -Name passwd2 -Value $enc -PropertyType Binary -Force | Out-Null
-          New-ItemProperty -Path $reg -Name AuthRequired -Value 1 -PropertyType DWord -Force | Out-Null
-          New-ItemProperty -Path $reg -Name PortNumber -Value 5900 -PropertyType DWord -Force | Out-Null
-          New-ItemProperty -Path $reg -Name AllowLoopback -Value 1 -PropertyType DWord -Force | Out-Null
-          netsh advfirewall firewall add rule name=uvnc dir=in action=allow protocol=TCP localport=5900 | Out-Null
-          $svc = Get-Service -Name uvnc_service -ErrorAction SilentlyContinue
-          if (-not $svc) { $svc = Get-Service -Name UltraVNC -ErrorAction SilentlyContinue }
-          if ($svc) {
-            Set-Service $svc.Name -StartupType Automatic -ErrorAction SilentlyContinue
-            Start-Service $svc.Name -ErrorAction SilentlyContinue
-            Write-Output "started service $($svc.Name)"
+          $pwB = "C:\vnc\pw.bin"
+          Remove-Item $pwB -ErrorAction SilentlyContinue
+          Write-Output "trying -controlpasswd with piped password"
+          $o1 = cmd /c "(echo sshhmm19 & echo sshhmm19) | `"$tvn`" -controlpasswd $pwB 2>&1"
+          $o1 | ForEach-Object { Write-Output "ctrlpw: $_" }
+          if (Test-Path $pwB) {
+            $blob = [System.IO.File]::ReadAllBytes($pwB)
+            Write-Output ("pw blob size: " + $blob.Length + " hex: " + (($blob | ForEach-Object { $_.ToString("X2") }) -join ""))
+            Set-ItemProperty -Path $reg -Name ControlPassword -Value $blob -PropertyType Binary -Force -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $reg -Name UseControlPassword -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue
           } else {
-            Write-Output "no service, fallback to winvnc.exe direct"
-            schtasks /create /tn uvnc /tr "`"$base\winvnc.exe`"" /sc once /st 00:00 /rl highest /f | Out-Null
-            schtasks /run /tn uvnc
+            Write-Output "-controlpasswd produced no file; using fixed-key DES in registry"
+            function Des-Ecb($data, $key) {
+              $des = [System.Security.Cryptography.DES]::Create()
+              $des.Mode = [System.Security.Cryptography.CipherMode]::ECB
+              $des.Padding = [System.Security.Cryptography.PaddingMode]::None
+              $des.Key = $key
+              $t = $des.CreateEncryptor().TransformFinalBlock($data, 0, $data.Length)
+              $des.Dispose()
+              return $t
+            }
+            $key = [byte[]](23,82,107,6,35,78,88,7)
+            $pw = "sshhmm19"
+            $pt = New-Object byte[] 8
+            for ($i=0; $i -lt 8; $i++) { $pt[$i] = [byte][char]$pw[$i] }
+            $enc = Des-Ecb $pt $key
+            Write-Output ("DES hex: " + (($enc | ForEach-Object { $_.ToString("X2") }) -join ""))
+            Set-ItemProperty -Path $reg -Name ControlPassword -Value $enc -PropertyType Binary -Force
+            Set-ItemProperty -Path $reg -Name UseControlPassword -Value 1 -PropertyType DWord -Force
           }
-          Start-Sleep -Seconds 5
-          for ($i=0; $i -lt 25; $i++) {
+          New-ItemProperty -Path $reg -Name RfbPort -Value 5900 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+          netsh advfirewall firewall add rule name=tvn dir=in action=allow protocol=TCP localport=5900 | Out-Null
+          schtasks /create /tn tvn /tr "`"$tvn`" -run" /sc once /st 00:00 /rl highest /f | Out-Null
+          schtasks /run /tn tvn
+          Start-Sleep -Seconds 8
+          for ($i=0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 2
             $ns = netstat -ano | Select-String ":5900\s.*LISTEN"
             if ($ns) { Write-Output "5900 LISTENING (netstat)"; break }
           }
           $ns = netstat -ano | Select-String ":5900\s.*LISTEN"
           if ($ns) {
-            Write-Output "VNC UP on 5900"
+            Write-Output "TIGH TVNC UP on 5900"
             Write-Output $ns
           } else {
             Write-Output "5900 NOT LISTENING"
-            if ($svc) { Write-Output "service state: $($svc.Status)" }
-            tasklist | Select-String "winvnc" | ForEach-Object { Write-Output $_ }
+            tasklist | Select-String "tvn" | ForEach-Object { Write-Output $_ }
+            Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc" } | ForEach-Object { Write-Output ("svc " + $_.Name + " " + $_.Status) }
+            $sc = sc.exe query tvnserver 2>&1; $sc | ForEach-Object { Write-Output $_ }
           }
 
       - name: Install noVNC + websockify
@@ -176,8 +132,8 @@ jobs:
           Add-Content -Path "C:\vnc\info.txt" -Value "=== diag ==="
           Add-Content -Path "C:\vnc\info.txt" -Value ("5900=" + (netstat -ano | Select-String ":5900\s.*LISTEN"))
           Add-Content -Path "C:\vnc\info.txt" -Value ("6080=" + (netstat -ano | Select-String ":6080\s.*LISTEN"))
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== winvnc process ==="
-          tasklist | Select-String "winvnc" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== tvnserver process ==="
+          tasklist | Select-String "tvn" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
           Add-Content -Path "C:\vnc\info.txt" -Value "=== python/websockify process ==="
           tasklist | Select-String "python" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
           Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.log ==="
@@ -200,10 +156,12 @@ jobs:
           $out = @()
           $out += "=== netstat ==="
           $out += (netstat -ano | Select-String "LISTEN") | Select-String "5900|6080"
-          $out += "=== tasklist winvnc ==="
-          $out += tasklist | Select-String "winvnc"
+          $out += "=== tasklist tvn ==="
+          $out += tasklist | Select-String "tvn"
           $out += "=== tasklist python ==="
           $out += tasklist | Select-String "python"
+          $out += "=== vnc services ==="
+          $out += Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc|uvnc" } | ForEach-Object { "svc " + $_.Name + " " + $_.Status }
           $out += "=== cf.log tail ==="
           $out += Get-Content "C:\cf.log" -Tail 20 -ErrorAction SilentlyContinue
           Set-Content "C:\vnc\final.txt" -Value $out
