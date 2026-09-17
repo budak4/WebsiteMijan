@@ -105,15 +105,21 @@ jobs:
           netsh advfirewall firewall add rule name=uvnc dir=in action=allow protocol=TCP localport=5900 | Out-Null
           $svc = Get-Service -Name uvnc_service -ErrorAction SilentlyContinue
           if ($svc) { Set-Service uvnc_service -StartupType Manual; Stop-Service uvnc_service -Force -ErrorAction SilentlyContinue }
-          Start-Process -FilePath "$base\winvnc.exe" -RedirectStandardError "C:\winvnc.err" -RedirectStandardOutput "C:\winvnc.out"
+          schtasks /create /tn uvnc /tr "`"$base\winvnc.exe`"" /sc once /st 00:00 /rl highest /f | Out-Null
+          schtasks /run /tn uvnc
+          Start-Sleep -Seconds 5
           for ($i=0; $i -lt 25; $i++) {
             Start-Sleep -Seconds 2
-            if (Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue) { Write-Output "5900 LISTENING"; break }
+            $ns = netstat -ano | Select-String ":5900\s.*LISTEN"
+            if ($ns) { Write-Output "5900 LISTENING (netstat)"; break }
           }
-          if (Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue) {
+          $ns = netstat -ano | Select-String ":5900\s.*LISTEN"
+          if ($ns) {
             Write-Output "VNC UP on 5900"
+            Write-Output $ns
           } else {
             Write-Output "5900 NOT LISTENING"
+            tasklist | Select-String "winvnc" | ForEach-Object { Write-Output $_ }
             Get-Content "C:\winvnc.err" -ErrorAction SilentlyContinue
           }
 
@@ -124,20 +130,26 @@ jobs:
           New-Item -ItemType Directory -Path "C:\novnc" -Force | Out-Null
           tar -xzf "C:\novnc.tar.gz" -C "C:\novnc"
           python -m pip install --quiet websockify
+          $webdir = (Get-ChildItem -Path "C:\novnc" -Directory | Select-Object -First 1).FullName
+          Set-Content "C:\vnc\webdir.txt" -Value $webdir
+          Set-Content "C:\vnc\python.txt" -Value ((Get-Command python -ErrorAction SilentlyContinue).Source)
+          Write-Output "webdir=$webdir"
 
       - name: Start websockify
         shell: powershell
         run: |
-          $webdir = (Get-ChildItem -Path "C:\novnc" -Directory | Select-Object -First 1).FullName
-          Write-Output "webdir: $webdir"
-          Start-Process -FilePath "python" -ArgumentList @("-m","websockify","--web",$webdir,"6080","localhost:5900") -RedirectStandardOutput "C:\ws.log" -RedirectStandardError "C:\ws.err"
-          for ($i=0; $i -lt 15; $i++) {
+          $webdir = (Get-Content "C:\vnc\webdir.txt" -Raw).Trim()
+          $py = (Get-Content "C:\vnc\python.txt" -Raw).Trim()
+          schtasks /create /tn websockify /tr "`"$py`" -m websockify --web `"$webdir`" 6080 localhost:5900" /sc once /st 00:00 /rl highest /f | Out-Null
+          schtasks /run /tn websockify
+          Start-Sleep -Seconds 5
+          for ($i=0; $i -lt 20; $i++) {
             Start-Sleep -Seconds 2
-            $ln = Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue
-            if ($ln) { Write-Output "6080 LISTENING"; break }
+            $ns = netstat -ano | Select-String ":6080\s.*LISTEN"
+            if ($ns) { Write-Output "6080 LISTENING (netstat)"; break }
           }
-          Get-Content "C:\ws.log" -ErrorAction SilentlyContinue
-          Get-Content "C:\ws.err" -ErrorAction SilentlyContinue
+          $ns = netstat -ano | Select-String ":6080\s.*LISTEN"
+          if ($ns) { Write-Output $ns } else { Write-Output "6080 NOT LISTENING" }
 
       - name: Start cloudflared tunnel
         shell: powershell
@@ -155,16 +167,12 @@ jobs:
           Add-Content -Path "C:\vnc\info.txt" -Value "password=sshhmm19"
           Add-Content -Path "C:\vnc\info.txt" -Value ""
           Add-Content -Path "C:\vnc\info.txt" -Value "=== diag ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value ("5900=" + [bool](Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorAction SilentlyContinue))
-          Add-Content -Path "C:\vnc\info.txt" -Value ("6080=" + [bool](Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue))
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== winvnc.out ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\winvnc.out" -Raw -ErrorAction SilentlyContinue)
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== winvnc.err ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\winvnc.err" -Raw -ErrorAction SilentlyContinue)
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== ws.log ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\ws.log" -Raw -ErrorAction SilentlyContinue)
-          Add-Content -Path "C:\vnc\info.txt" -Value "=== ws.err ==="
-          Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\ws.err" -Raw -ErrorAction SilentlyContinue)
+          Add-Content -Path "C:\vnc\info.txt" -Value ("5900=" + (netstat -ano | Select-String ":5900\s.*LISTEN"))
+          Add-Content -Path "C:\vnc\info.txt" -Value ("6080=" + (netstat -ano | Select-String ":6080\s.*LISTEN"))
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== winvnc process ==="
+          tasklist | Select-String "winvnc" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
+          Add-Content -Path "C:\vnc\info.txt" -Value "=== python/websockify process ==="
+          tasklist | Select-String "python" | ForEach-Object { Add-Content -Path "C:\vnc\info.txt" -Value $_ }
           Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.log ==="
           Add-Content -Path "C:\vnc\info.txt" -Value (Get-Content "C:\cf.log" -Raw -ErrorAction SilentlyContinue)
           Add-Content -Path "C:\vnc\info.txt" -Value "=== cf.err ==="
@@ -176,6 +184,39 @@ jobs:
         with:
           name: windows-novnc
           path: C:\vnc\info.txt
+          overwrite: true
+
+      - name: Final verify
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 8
+          $out = @()
+          $out += "=== netstat ==="
+          $out += (netstat -ano | Select-String "LISTEN") | Select-String "5900|6080"
+          $out += "=== tasklist winvnc ==="
+          $out += tasklist | Select-String "winvnc"
+          $out += "=== tasklist python ==="
+          $out += tasklist | Select-String "python"
+          $out += "=== cf.log tail ==="
+          $out += Get-Content "C:\cf.log" -Tail 20 -ErrorAction SilentlyContinue
+          Set-Content "C:\vnc\final.txt" -Value $out
+          Get-Content "C:\vnc\final.txt"
+          $url = (Get-Content "C:\vnc\info.txt" | Select-String "url=").Line -replace '^url=',''
+          if (-not $url) { $url = (Get-Content "C:\cf.err" -Raw -ErrorAction SilentlyContinue) | Select-String 'https://[a-z0-9-]+\.trycloudflare\.com' | Select-Object -First 1 }
+          $out = @()
+          $out += "url=$url"
+          $out += "password=sshhmm19"
+          $out += ""
+          $out += $out[2..($out.Count-1)]
+          $out2 = @("url=$url","password=sshhmm19") + $out[2..999] + (Get-Content "C:\vnc\final.txt")
+          Set-Content "C:\vnc\info.txt" -Value $out2
+
+      - name: Upload final
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-novnc
+          path: C:\vnc\info.txt
+          overwrite: true
 
       - name: Keep alive
         shell: powershell
