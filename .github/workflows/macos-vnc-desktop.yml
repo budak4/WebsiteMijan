@@ -10,17 +10,26 @@ jobs:
     steps:
       - name: Enable built-in VNC (Screen Sharing)
         run: |
+          echo "=== windowserver / session ==="
+          ps aux | grep -E 'WindowServer|loginwindow' | grep -v grep || echo "NO WINDOWSERVER"
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement ARD_AllLocalUsers -bool true
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access on -allowAccessFor -allUsers -privs -all -restart -agent -menu
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw sshhmm1900
+          ARD=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
+          sudo "$ARD" -activate -configure -access on -restart -agent -privs -all -menu
+          sudo "$ARD" -configure -allowAccessFor -allUsers -privs -all
+          sudo "$ARD" -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw sshhmm1900 -setvnclocalsave -vnclocalsave no
           sudo launchctl enable system/com.apple.screensharing || true
           sudo launchctl kickstart -kp system/com.apple.screensharing || true
-          sleep 5
-          echo "=== vnc port ==="
-          sudo lsof -iTCP:5900 -sTCP:LISTEN -P -n || true
-          sudo launchctl print system/com.apple.screensharing 2>/dev/null | head -5 || true
+          sudo "$ARD" -restart -agent -console || true
+          sleep 10
+          echo "=== list screen services ==="
+          sudo launchctl list 2>/dev/null | grep -iE 'screen|remote' || true
+          echo "=== vnc port (retry) ==="
+          for i in $(seq 1 8); do
+            L=$(sudo lsof -iTCP:5900 -sTCP:LISTEN -P -n 2>/dev/null)
+            [ -n "$L" ] && echo "$L" && break
+            sleep 3
+          done
+          sudo lsof -iTCP:5900 -sTCP:LISTEN -P -n || echo "5900 NOT LISTENING"
 
       - name: Install noVNC + websockify
         run: |
