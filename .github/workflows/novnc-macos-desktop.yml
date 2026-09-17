@@ -10,13 +10,17 @@ jobs:
     steps:
       - name: Enable built-in VNC (Screen Sharing)
         run: |
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement ARD_AllLocalUsers -bool true
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access on -allowAccessFor -allUsers -privs -all -restart -agent -menu
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw sshhmm1900
-          sleep 3
+          sudo launchctl enable system/com.apple.screensharing || true
+          sudo launchctl kickstart -kp system/com.apple.screensharing || true
+          sleep 5
           echo "=== vnc port ==="
-          sudo lsof -iTCP -sTCP:LISTEN -P -n | grep 5900 || true
+          sudo lsof -iTCP:5900 -sTCP:LISTEN -P -n || true
+          sudo launchctl print system/com.apple.screensharing 2>/dev/null | head -5 || true
 
       - name: Install noVNC + websockify
         run: |
@@ -40,6 +44,40 @@ jobs:
           nc -z localhost 5900 && echo "vnc 5900 ok" || echo "vnc 5900 FAIL"
           cat /tmp/ws.log
           netstat -an | grep -E '\.5900|\.6080' | grep LISTEN || true
+
+      - name: Diagnostics
+        run: |
+          {
+            echo "=== vnc listen ===";
+            sudo lsof -iTCP:5900 -P -n || true;
+            echo "=== ports ===";
+            netstat -an | grep -E '\.5900|\.6080' | grep LISTEN || true;
+            echo "=== rfb handshake test ===";
+            python3 - <<'EOF'
+import socket
+try:
+    s = socket.create_connection(('localhost', 5900), timeout=5)
+    s.settimeout(5)
+    v = s.recv(12)
+    print('server version:', v)
+    s.sendall(b'RFB 003.008\n')
+    n = s.recv(1)[0]
+    print('security types count:', n)
+    print('types:', s.recv(n))
+except Exception as e:
+    print('RFB TEST FAILED:', repr(e))
+EOF
+            echo "=== websockify log ===";
+            cat /tmp/ws.log 2>/dev/null || true;
+          } > /tmp/diag.txt 2>&1
+          cat /tmp/diag.txt
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics
+          path: /tmp/diag.txt
+          include-hidden-files: true
 
       - name: Start cloudflared tunnel
         run: |
