@@ -1,0 +1,62 @@
+name: windows-rdp
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    env:
+      NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+    steps:
+      - name: Enable RDP + set password
+        shell: powershell
+        run: |
+          $Password = "GhaRdp#2709"
+          net user runneradmin $Password
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 0 /f
+          netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+          Write-Output "RDP enabled, user=runneradmin"
+
+      - name: Install ngrok
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "$env:TEMP\ngrok.zip"
+          Expand-Archive "$env:TEMP\ngrok.zip" -DestinationPath "C:\ngrok" -Force
+          C:\ngrok\ngrok.exe config add-authtoken $env:NGROK_TOKEN
+          Write-Output "ngrok configured"
+
+      - name: Start ngrok TCP 3389
+        shell: powershell
+        run: |
+          Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList @("tcp","3389","--log=stdout") -RedirectStandardOutput "C:\ngrok\tunnel.log" -RedirectStandardError "C:\ngrok\tunnel.err"
+          Start-Sleep -Seconds 2
+          for ($i=0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-RestMethod "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 5
+              if ($r.tunnels.Count -gt 0) {
+                $url = $r.tunnels[0].public_url
+                Write-Output "RDP_URL=$url"
+                Set-Content -Path "C:\ngrok\rdp-url.txt" -Value $url
+                break
+              }
+            } catch {}
+          }
+          Write-Output "--- ngrok log ---"
+          Get-Content "C:\ngrok\tunnel.log" -ErrorAction SilentlyContinue
+          Get-Content "C:\ngrok\tunnel.err" -ErrorAction SilentlyContinue
+          Write-Output "-----------------"
+
+      - name: Upload RDP URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-url
+          path: C:\ngrok\rdp-url.txt
+
+      - name: Keep alive
+        shell: powershell
+        run: Start-Sleep -Seconds 21600
