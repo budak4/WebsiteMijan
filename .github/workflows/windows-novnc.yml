@@ -80,17 +80,15 @@ jobs:
       - name: Test VNC auth over loopback
         shell: powershell
         run: |
-          pip install -q vncdotool 2>C:\vnc\pip.log | Out-Null
-          python -c "import base64;open('C:/vnc/vnctest.py','w').write(base64.b64decode('ZnJvbSB2bmNkb3Rvb2wgaW1wb3J0IGFwaQp0cnk6CiAgICBjID0gYXBpLmNvbm5lY3QoJ2xvY2FsaG9zdDo6NTkwMCcsIHBhc3N3b3JkPSdzc2hobW0xOScsIHRpbWVvdXQ9MzApCiAgICBwcmludCgnQVVUSF9PSycpCiAgICBjLmRpc2Nvbm5lY3QoKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwcmludCgnQVVUSF9GQUlMICcgKyB0eXBlKGUpLl9fbmFtZV9fICsgJzogJyArIHN0cihlKSkK'))" 2>null
-          $imp = python -c "import vncdotool; print('IMPORT_OK')" 2>C:\vnc\imp_err.txt
-          $t = python C:\vnc\vnctest.py 2>C:\vnc\vnc_err.txt
+          pip install -q vncdotool 2>$null | Out-Null
+          cmd /c "python -c ""import base64;open('C:/vnc/vnctest.py','w').write(base64.b64decode('ZnJvbSB2bmNkb3Rvb2wgaW1wb3J0IGFwaQp0cnk6CiAgICBjID0gYXBpLmNvbm5lY3QoJ2xvY2FsaG9zdDo6NTkwMCcsIHBhc3N3b3JkPSdzc2hobW0xOScsIHRpbWVvdXQ9MzApCiAgICBwcmludCgnQVVUSF9PSycpCiAgICBjLmRpc2Nvbm5lY3QoKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwcmludCgnQVVUSF9GQUlMICcgKyB0eXBlKGUpLl9fbmFtZV9fICsgJzogJyArIHN0cihlKSkK'))"" > C:\vnc\w1.txt 2>&1"
+          cmd /c "python -c ""import vncdotool; print('IMPORT_OK')"" > C:\vnc\w2.txt 2>&1"
+          cmd /c "python C:\vnc\vnctest.py > C:\vnc\w3.txt 2>&1"
           $diag = @()
-          $diag += "pip_log: " + ((Get-Content C:\vnc\pip.log -Raw -ErrorAction SilentlyContinue).Trim())
-          $diag += "import_stdout: " + ($imp -join ",")
-          $diag += "import_stderr: " + ((Get-Content C:\vnc\imp_err.txt -Raw -ErrorAction SilentlyContinue).Trim())
-          $diag += "test_stdout: " + ($t -join ",")
-          $diag += "test_stderr: " + ((Get-Content C:\vnc\vnc_err.txt -Raw -ErrorAction SilentlyContinue).Trim())
-          if (($t -join ",") -match "AUTH_OK") { $diag += "VERDICT: OK" } else { $diag += "VERDICT: FAIL" }
+          $diag += "write_file: " + ((Get-Content C:\vnc\w1.txt -Raw -ErrorAction SilentlyContinue).Trim())
+          $diag += "import_out: " + ((Get-Content C:\vnc\w2.txt -Raw -ErrorAction SilentlyContinue).Trim())
+          $diag += "test_out: " + ((Get-Content C:\vnc\w3.txt -Raw -ErrorAction SilentlyContinue).Trim())
+          if ((Get-Content C:\vnc\w3.txt -Raw -ErrorAction SilentlyContinue) -match "AUTH_OK") { $diag += "VERDICT_OK" } else { $diag += "VERDICT_FAIL" }
           $diag | ForEach-Object { Write-Output "diag: $_" }
           Set-Content -Path "C:\vnc\auth.txt" -Value $diag
 
@@ -164,10 +162,10 @@ jobs:
           $out += "=== tasklist cloudflared ==="
           $out += tasklist | Select-String "cloudflared"
           if (Test-Path "C:\vnc\vnctest.py") {
-            $r2 = python C:\vnc\vnctest.py 2>C:\vnc\vnc_err2.txt
-            $add = @("final_stdout: " + ($r2 -join ","), "final_stderr: " + ((Get-Content C:\vnc\vnc_err2.txt -Raw -ErrorAction SilentlyContinue).Trim()))
+            cmd /c "python C:\vnc\vnctest.py > C:\vnc\w4.txt 2>&1"
+            $add = @("final_out: " + ((Get-Content C:\vnc\w4.txt -Raw -ErrorAction SilentlyContinue).Trim()))
             Add-Content -Path "C:\vnc\auth.txt" -Value $add -ErrorAction SilentlyContinue
-            $out += ("FINAL_AUTH=" + ($r2 -join ","))
+            $out += ("FINAL_AUTH=" + ((Get-Content C:\vnc\w4.txt -Raw -ErrorAction SilentlyContinue).Trim()))
           } else {
             $out += "vnctest.py missing"
           }
