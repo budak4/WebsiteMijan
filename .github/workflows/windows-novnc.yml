@@ -13,6 +13,8 @@ jobs:
         run: |
           choco install tigervnc -y --no-progress
           if ($LASTEXITCODE -ne 0) { choco install tigervnc -y --force --no-progress }
+          Write-Output "exit=$LASTEXITCODE"
+          Get-ChildItem -Path "C:\Program Files\TigerVNC" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
           $vncserver = Get-ChildItem -Recurse -Path "C:\Program Files\TigerVNC" -Filter "vncserver.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
           if (-not $vncserver) { $vncserver = (Get-Command vncserver -ErrorAction SilentlyContinue).Source }
           $vncpass = Get-ChildItem -Recurse -Path "C:\Program Files\TigerVNC" -Filter "vncpasswd.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
