@@ -52,8 +52,8 @@ jobs:
             ls -la /tmp/vncpass;
             echo "=== test 6080 ===";
             curl -s -o /dev/null -w "local6080=%{http_code}\n" http://localhost:6080/vnc.html;
-          } > /tmp/opencode/diag.txt 2>&1 || true
-          cat /tmp/opencode/diag.txt
+          } > /tmp/diag.txt 2>&1 || true
+          cat /tmp/diag.txt
 
       - name: Start cloudflared tunnel
         run: |
@@ -78,7 +78,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: diagnostics
-          path: /tmp/opencode/diag.txt
+          path: /tmp/diag.txt
           include-hidden-files: true
 
       - name: Keep alive
