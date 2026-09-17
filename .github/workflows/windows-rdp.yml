@@ -28,7 +28,7 @@ jobs:
       - name: Install bore (bore.pub tunnel)
         shell: powershell
         run: |
-          $rel = Invoke-RestMethod "https://api.github.com/repos/ekzhang/bore/releases/latest" -Headers @{ "User-Agent" = "GHA" }
+          $rel = Invoke-RestMethod "https://api.github.com/repos/ekzhang/bore/releases/latest" -Headers @{ "User-Agent" = "GHA"; "Authorization" = "Bearer $env:GITHUB_TOKEN" }
           $asset = $rel.assets | Where-Object { $_.name -match 'x86_64-windows-msvc.zip' } | Select-Object -First 1
           if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -match 'windows' } | Select-Object -First 1 }
           Write-Output "downloading: $($asset.name)"
