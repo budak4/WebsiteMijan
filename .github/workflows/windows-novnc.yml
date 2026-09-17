@@ -92,15 +92,7 @@ jobs:
         shell: powershell
         run: |
           pip install -q vncdotool 2>$null | Out-Null
-          Set-Content -Path "C:\vnc\vnctest.py" -Value @'
-from vncdotool import api
-try:
-    c = api.connect('localhost::5900', password='sshhmm19', timeout=30)
-    print('AUTH_OK')
-    c.disconnect()
-except Exception as e:
-    print('AUTH_FAIL ' + type(e).__name__ + ': ' + str(e))
-'@
+          python -c "import base64;open('C:/vnc/vnctest.py','w').write(base64.b64decode('ZnJvbSB2bmNkb3Rvb2wgaW1wb3J0IGFwaQp0cnk6CiAgICBjID0gYXBpLmNvbm5lY3QoJ2xvY2FsaG9zdDo6NTkwMCcsIHBhc3N3b3JkPSdzc2hobW0xOScsIHRpbWVvdXQ9MzApCiAgICBwcmludCgnQVVUSF9PSycpCiAgICBjLmRpc2Nvbm5lY3QoKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwcmludCgnQVVUSF9GQUlMICcgKyB0eXBlKGUpLl9fbmFtZV9fICsgJzogJyArIHN0cihlKSkK'))"
           python C:\vnc\vnctest.py
           $r = python C:\vnc\vnctest.py 2>$null
           $r | ForEach-Object { Write-Output "vnc: $_" }
