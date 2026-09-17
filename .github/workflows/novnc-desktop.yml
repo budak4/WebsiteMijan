@@ -25,11 +25,35 @@ jobs:
           sleep 2
           startxfce4 &
           sleep 4
-          printf "sshhmm1900\nsshhmm1900\n" | x11vnc -storepasswd /dev/stdin /tmp/vncpass 2>/dev/null
-          x11vnc -display :99 -forever -shared -rfbauth /tmp/vncpass &
+          x11vnc -storepasswd sshhmm1900 /tmp/vncpass
+          x11vnc -display :99 -rfbport 5900 -forever -shared -rfbauth /tmp/vncpass &
+          for i in $(seq 1 10); do
+            ss -tlnp | grep -q 5900 && break
+            sleep 2
+          done
           websockify --web=/usr/share/novnc 6080 localhost:5900 &
-          sleep 3
-          echo "noVNC running on 6080"
+          for i in $(seq 1 10); do
+            ss -tlnp | grep -q 6080 && break
+            sleep 2
+          done
+          sleep 2
+          echo "noVNC services started"
+          ss -tlnp | grep -E '5900|6080' || true
+          ps aux | grep -E 'Xvfb|x11vnc|websockify|xfce' | grep -v grep || true
+
+      - name: Diagnostics
+        run: |
+          {
+            echo "=== listening ports ===";
+            ss -tlnp;
+            echo "=== processes ===";
+            ps aux | grep -E 'Xvfb|x11vnc|websockify|xfce' | grep -v grep;
+            echo "=== vncpass file ===";
+            ls -la /tmp/vncpass;
+            echo "=== test 6080 ===";
+            curl -s -o /dev/null -w "local6080=%{http_code}\n" http://localhost:6080/vnc.html;
+          } > /tmp/opencode/diag.txt 2>&1 || true
+          cat /tmp/opencode/diag.txt
 
       - name: Start cloudflared tunnel
         run: |
@@ -48,6 +72,13 @@ jobs:
         with:
           name: desktop-url
           path: desktop-url.txt
+          include-hidden-files: true
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics
+          path: /tmp/opencode/diag.txt
           include-hidden-files: true
 
       - name: Keep alive
