@@ -1,0 +1,47 @@
+name: novnc-desktop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Install desktop + VNC + noVNC
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            xvfb xfce4 xfce4-terminal x11vnc novnc websockify \
+            git curl jq >/dev/null 2>&1
+          sudo apt-get install -y -qq ca-certificates >/dev/null 2>&1
+          curl -L -o /tmp/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x /tmp/cloudflared
+
+      - name: Start desktop + noVNC
+        run: |
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 2
+          startxfce4 &
+          sleep 4
+          printf "sshhmm1900\nsshhmm1900\n" | x11vnc -storepasswd /dev/stdin /tmp/vncpass 2>/dev/null
+          x11vnc -display :99 -forever -shared -rfbauth /tmp/vncpass &
+          websockify --web=/usr/share/novnc 6080 localhost:5900 &
+          sleep 3
+          echo "noVNC running on 6080"
+
+      - name: Start cloudflared tunnel
+        run: |
+          /tmp/cloudflared tunnel --url http://localhost:6080 --no-autoupdate > /tmp/tunnel.log 2>&1 &
+          for i in $(seq 1 30); do
+            URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/tunnel.log | head -1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          echo "DESKTOP_URL=$URL"
+          echo "DESKTOP_URL=$URL" >> "$GITHUB_ENV"
+          echo "::notice title=Open Desktop::Buka URL ini dalam browser (password: sshhmm1900) -> $URL"
+
+      - name: Keep alive
+        run: sleep 36000
