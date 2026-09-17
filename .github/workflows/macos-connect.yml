@@ -1,0 +1,15 @@
+name: macos-connect
+
+on:
+  workflow_dispatch:
+
+jobs:
+  tmate:
+    runs-on: macos-latest
+    steps:
+      - name: Start tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+      - name: Keep alive
+        run: sleep 18000
