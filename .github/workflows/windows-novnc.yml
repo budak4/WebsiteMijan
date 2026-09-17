@@ -15,8 +15,17 @@ jobs:
           choco install ultravnc -y --no-progress 2>&1 | ForEach-Object { Write-Output "choco: $_" }
           Write-Output "choco_exit=$LASTEXITCODE"
           $base = ""
-          foreach ($d in @("C:\Program Files\UltraVNC","C:\Program Files (x86)\UltraVNC","C:\Program Files\uvnc","C:\Program Files (x86)\uvnc")) {
+          foreach ($d in @(
+            "C:\Program Files\uvnc bvba\UltraVNC",
+            "C:\Program Files (x86)\uvnc bvba\UltraVNC",
+            "C:\Program Files\UltraVNC",
+            "C:\Program Files (x86)\UltraVNC"
+          )) {
             if (Test-Path "$d\winvnc.exe") { $base = $d; break }
+          }
+          if (-not $base) {
+            $hit = Get-ChildItem -Path "C:\Program Files" -Recurse -Filter "winvnc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $base = $hit.DirectoryName }
           }
           if (-not $base) {
             Write-Output "choco yield no winvnc, trying uvnc.eu 1.3.2"
@@ -24,8 +33,12 @@ jobs:
             Write-Output ("setup size: " + (Get-Item C:\uvnc_setup.exe).Length)
             $p = Start-Process -FilePath "C:\uvnc_setup.exe" -ArgumentList "/VERYSILENT","/SP-","/SUPPRESSMSGBOXES","/NOREBOOT" -Wait -PassThru
             Write-Output "setup exit: $($p.ExitCode)"
-            foreach ($d in @("C:\Program Files\UltraVNC","C:\Program Files (x86)\UltraVNC")) {
+            foreach ($d in @("C:\Program Files\uvnc bvba\UltraVNC","C:\Program Files\UltraVNC","C:\Program Files (x86)\UltraVNC")) {
               if (Test-Path "$d\winvnc.exe") { $base = $d; break }
+            }
+            if (-not $base) {
+              $hit = Get-ChildItem -Path "C:\Program Files" -Recurse -Filter "winvnc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($hit) { $base = $hit.DirectoryName }
             }
           }
           Write-Output "UVNC base: $base"
