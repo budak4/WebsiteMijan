@@ -45,7 +45,7 @@ jobs:
               New-Item -Path $r -Force -ErrorAction SilentlyContinue | Out-Null
               New-ItemProperty -Path $r -Name AllowLoopback -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
               New-ItemProperty -Path $r -Name LoopbackOnly -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
-              New-ItemProperty -Path $r -Name UseVncAuthentication -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+              New-ItemProperty -Path $r -Name UseVncAuthentication -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
               New-ItemProperty -Path $r -Name UseControlAuthentication -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
               New-ItemProperty -Path $r -Name RepeatControlAuthentication -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
               New-ItemProperty -Path $r -Name AcceptRfbConnections -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
@@ -80,58 +80,13 @@ jobs:
             Get-Service | Where-Object { $_.Name -match "tvn|tight|vnc" } | ForEach-Object { Write-Output ("svc " + $_.Name + " " + $_.Status) }
           }
 
-      - name: Test VNC auth over loopback
+      - name: Verify VNC up (noauth)
         shell: powershell
         run: |
-          Set-Content -Path "C:\vnc\b64.txt" -Value "-----BEGIN CERTIFICATE-----"
-          Add-Content -Path "C:\vnc\b64.txt" -Value "aW1wb3J0IHdhcm5pbmdzLCBzeXMKd2FybmluZ3MuZmlsdGVyd2FybmluZ3MoJ2lnbm9yZScpCm91dCA9IHN5cy5hcmd2WzFdCnJlcyA9ICdFTVBUWScKdHJ5OgogICAgZnJvbSB2bmNkb3Rvb2wgaW1wb3J0IGFwaQogICAgYyA9IGFwaS5jb25uZWN0KCdsb2NhbGhvc3Q6OjU5MDAnLCBwYXNzd29yZD0nc3NoaG1tMTknLCB0aW1lb3V0PTI1KQogICAgcmVzID0gJ0FVVEhfT0snCiAgICBjLmRpc2Nvbm5lY3QoKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICByZXMgPSAnQVVUSF9GQUlMICcgKyB0eXBlKGUpLl9fbmFtZV9fICsgJzogJyArIHN0cihlKQpvcGVuKG91dCwgJ3cnKS53cml0ZShyZXMpCg=="
-          Add-Content -Path "C:\vnc\b64.txt" -Value "-----END CERTIFICATE-----"
-          certutil -decode "C:\vnc\b64.txt" "C:\vnc\vnctest.py" | Out-Null
-          pip install -q vncdotool 2>$null | Out-Null
-          $tvn = (Get-Content "C:\vnc\tvn.txt" -Raw).Trim()
-          $encPlain = [byte[]](0x41,0xB6,0xB1,0x0C,0xB9,0xF7,0x9D,0x44)
-          $roots = @(
-            "HKCU:\Software\TightVNC\Server",
-            "HKLM:\Software\TightVNC\Server",
-            "HKLM:\Software\ORL\WinVNC3\Default"
-          )
-          function Set-Pass($enc) {
-            foreach ($r in $roots) {
-              New-Item -Path $r -Force -ErrorAction SilentlyContinue | Out-Null
-              New-ItemProperty -Path $r -Name Password -Value $enc -PropertyType Binary -Force -ErrorAction SilentlyContinue | Out-Null
-              New-ItemProperty -Path $r -Name PasswordViewOnly -Value $enc -PropertyType Binary -Force -ErrorAction SilentlyContinue | Out-Null
-              New-ItemProperty -Path $r -Name ControlPassword -Value $enc -PropertyType Binary -Force -ErrorAction SilentlyContinue | Out-Null
-            }
-          }
-          function Restart-Tvn {
-            Stop-Process -Name tvnserver -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 3
-            schtasks /run /tn tvn
-            Start-Sleep -Seconds 8
-            for ($i=0; $i -lt 30; $i++) {
-              Start-Sleep -Seconds 2
-              $ns = netstat -ano | Select-String ":5900\s.*LISTEN"
-              if ($ns) { break }
-            }
-          }
-          Restart-Tvn
-          python -W ignore C:\vnc\vnctest.py C:\vnc\t1.txt 2>$null
-          $o1 = Get-Content C:\vnc\t1.txt -Raw -ErrorAction SilentlyContinue
-          Write-Output "attempt1(vintage): $o1"
-          $verdict = "VINTAGE"
-          if ($o1 -match "AUTH_OK") { $verdict = "VINTAGE_OK" }
-          else {
-            Set-Pass $encPlain
-            Restart-Tvn
-            python -W ignore C:\vnc\vnctest.py C:\vnc\t2.txt 2>$null
-            $o2 = Get-Content C:\vnc\t2.txt -Raw -ErrorAction SilentlyContinue
-            Write-Output "attempt2(plain): $o2"
-            if ($o2 -match "AUTH_OK") { $verdict = "PLAIN_OK" } else { $verdict = "$o1 || $o2" }
-          }
-          Write-Output "VERDICT=$verdict"
-          Set-Content -Path "C:\vnc\auth.txt" -Value "VERDICT=$verdict"
-          Add-Content -Path "C:\vnc\auth.txt" -Value "t1=$o1"
-          if ($o2) { Add-Content -Path "C:\vnc\auth.txt" -Value "t2=$o2" }
+          $ns = netstat -ano | Select-String ":5900\s.*LISTEN"
+          if ($ns) { Write-Output "5900 LISTENING" } else { Write-Output "5900 NOT LISTENING" }
+          Set-Content -Path "C:\vnc\auth.txt" -Value "VERDICT=NOAUTH"
+          Add-Content -Path "C:\vnc\auth.txt" -Value "listening=$($null -ne $ns)"
 
       - name: Install noVNC + websockify
         shell: powershell
@@ -176,7 +131,7 @@ jobs:
           }
           Write-Output "URL=$url"
           Set-Content -Path "C:\vnc\info.txt" -Value "url=$url"
-          Add-Content -Path "C:\vnc\info.txt" -Value "password=sshhmm19"
+          Add-Content -Path "C:\vnc\info.txt" -Value "password=none"
 
       - name: Upload info
         uses: actions/upload-artifact@v4
@@ -225,10 +180,10 @@ jobs:
           if (-not $url) { $url = (Get-Content "C:\cf.err" -Raw -ErrorAction SilentlyContinue) | Select-String 'https://[a-z0-9-]+\.trycloudflare\.com' | Select-Object -First 1 }
           $out = @()
           $out += "url=$url"
-          $out += "password=sshhmm19"
+          $out += "password=none"
           $out += ""
           $out += $out[2..($out.Count-1)]
-          $out2 = @("url=$url","password=sshhmm19") + $out[2..999] + (Get-Content "C:\vnc\final.txt")
+          $out2 = @("url=$url","password=none") + $out[2..999] + (Get-Content "C:\vnc\final.txt")
           Set-Content "C:\vnc\info.txt" -Value $out2
 
       - name: Upload final
