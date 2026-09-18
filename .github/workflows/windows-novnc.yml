@@ -6,7 +6,9 @@ on:
 jobs:
   wn:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 365
+    permissions:
+      contents: write
     steps:
       - name: Install TightVNC
         shell: powershell
@@ -118,6 +120,8 @@ jobs:
 
       - name: Start cloudflared tunnel
         shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "C:\cloudflared.exe" -TimeoutSec 120
           Set-Content -Path "C:\cftun.cmd" -Value "C:\cloudflared.exe tunnel --url http://localhost:6080 --no-autoupdate > C:\cf.log 2>&1"
@@ -132,6 +136,20 @@ jobs:
           Write-Output "URL=$url"
           Set-Content -Path "C:\vnc\info.txt" -Value "url=$url"
           Add-Content -Path "C:\vnc\info.txt" -Value "password=none"
+          $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($url + "`n")))
+          $h = @{ Authorization = "token $env:GH_TOKEN" }
+          $sha = $null
+          try {
+            $existing = Invoke-RestMethod -Method GET -Uri "https://api.github.com/repos/budak4/WebsiteMijan/contents/vnc-url.txt" -Headers $h -ErrorAction Stop
+            $sha = $existing.sha
+          } catch { }
+          if ($sha) {
+            $body = @{ message = "update live vnc url"; content = $b64; sha = $sha } | ConvertTo-Json
+          } else {
+            $body = @{ message = "create live vnc url"; content = $b64 } | ConvertTo-Json
+          }
+          $res = Invoke-RestMethod -Method PUT -Uri "https://api.github.com/repos/budak4/WebsiteMijan/contents/vnc-url.txt" -Headers $h -Body $body
+          Write-Output "live url committed: $($res.content.path)"
 
       - name: Upload info
         uses: actions/upload-artifact@v4
@@ -197,4 +215,11 @@ jobs:
 
       - name: Keep alive
         shell: powershell
-        run: Start-Sleep -Seconds 21600
+        run: Start-Sleep -Seconds 21450
+
+      - name: Rollover next session
+        if: vars.AUTORUN != 'off'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: powershell
+        run: gh workflow run windows-novnc.yml
